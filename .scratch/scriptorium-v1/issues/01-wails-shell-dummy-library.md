@@ -41,9 +41,11 @@ it does, the fix is to make the webview navigate to the loopback URL directly
 rather than to keep proxying.
 
 **Go version:** Wails v2.15.0 requires Go >= 1.25, so `go.mod` says `go 1.25.0`.
-`go version` on this machine reports 1.24.2; Go's automatic toolchain switching
-fetches 1.25 on demand, which it did. Builds and tests therefore need network on a
-cold cache, and fail under `GOTOOLCHAIN=local` on a 1.24 machine.
+The ticket's note about 1.24.2 is stale — Go 1.26.7 is now installed, and
+`.tool-versions` pins the project to it. `~/.tool-versions` still pins
+`golang 1.24.2` globally, so anything resolving through the asdf shims outside this
+directory gets 1.24 and falls back to Go's automatic toolchain download. Build and
+tests pass under `GOTOOLCHAIN=local` on 1.26.7.
 
 Generated assets (`internal/ui/static/app.css`, `htmx.min.js`) are committed so
 `go build` and `go test` work without running npm; `npm run build` in `frontend/`
