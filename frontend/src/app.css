@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+/* Class names live in the Go templates, not under frontend/, so Tailwind's
+   automatic source detection has to be pointed at them explicitly. */
+@source "../../internal/ui/templates";
+
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark;
+}

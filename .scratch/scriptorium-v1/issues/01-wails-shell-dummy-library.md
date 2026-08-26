@@ -8,11 +8,54 @@ Per the spec's UI decision: Wails v2 wrapping an embedded Go HTTP server serving
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `wails dev` and a production build both produce a working application window
-- [ ] The embedded server binds to loopback on a random port, never a fixed one
-- [ ] Requests with a foreign `Origin` are rejected
-- [ ] The library page lists fixture Series, Books, and Statuses using the six Status values from `CONTEXT.md`
-- [ ] htmx, Tailwind, and daisyUI are wired and demonstrably working (one interactive element is enough)
-- [ ] Assets are embedded in the binary, not read from disk at runtime
+- [x] `wails dev` and a production build both produce a working application window
+- [x] The embedded server binds to loopback on a random port, never a fixed one
+- [x] Requests with a foreign `Origin` are rejected
+- [x] The library page lists fixture Series, Books, and Statuses using the six Status values from `CONTEXT.md`
+- [x] htmx, Tailwind, and daisyUI are wired and demonstrably working (one interactive element is enough)
+- [x] Assets are embedded in the binary, not read from disk at runtime
+
+## Comments
+
+Implemented. Wails CLI v2.15.0 installed via `go install`.
+
+**Wails will not navigate the webview to an http URL.** The first attempt served a
+redirect page from the Wails asset protocol pointing at the loopback server; the
+webview never followed it, and the loopback listener logged no requests. The asset
+handler is therefore a reverse proxy onto the loopback listener (`windowProxy` in
+`main.go`), so every request the window makes does travel over the real listener.
+Verified by instrumenting the listener and running the packaged app: it logs
+`GET /`, `GET /static/app.css`, `GET /static/htmx.min.js`. The same check passes
+under `wails dev`.
+
+The proxy presents the server's own Origin, because a request arriving through it
+came from inside the process. The origin check guards the listener against
+everything else on the machine — a page in the user's browser can reach a loopback
+port but cannot forge an Origin.
+
+**Open risk for #16:** the reason for choosing an embedded server was server-sent
+events, and SSE now passes through the Wails asset protocol, which may buffer. If
+it does, the fix is to make the webview navigate to the loopback URL directly
+rather than to keep proxying.
+
+**Go version:** Wails v2.15.0 requires Go >= 1.25, so `go.mod` says `go 1.25.0`.
+`go version` on this machine reports 1.24.2; Go's automatic toolchain switching
+fetches 1.25 on demand, which it did. Builds and tests therefore need network on a
+cold cache, and fail under `GOTOOLCHAIN=local` on a 1.24 machine.
+
+Generated assets (`internal/ui/static/app.css`, `htmx.min.js`) are committed so
+`go build` and `go test` work without running npm; `npm run build` in `frontend/`
+regenerates them.
+
+Reviewed with `/code-review`. Five findings, all fixed: the Origin check now also
+validates `Host` (an Origin-less DNS-rebinding request was getting through),
+templates render into a buffer so a mid-execution failure is a 500 rather than a
+200 with half a page, the `http.Server` has header/idle timeouts and a `Close`,
+`/static/` no longer serves a directory index, and the layout no longer pins
+`data-theme="light"` over daisyUI's `prefersdark`.
+
+The window was not confirmed visually — this shell lacks assistive access and
+`screencapture` only reaches the frontmost Space, so the window never landed in a
+screenshot. Worth an eyeball.

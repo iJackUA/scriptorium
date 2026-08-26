@@ -1,0 +1,61 @@
+{{template "layout" .}}
+
+{{define "content"}}
+<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-6">
+  <div class="flex flex-col gap-6">
+    {{range .Series}}
+      <section class="card bg-base-100 shadow-sm">
+        <div class="card-body gap-4">
+          {{if not .Standalone}}
+            <h2 class="card-title">
+              {{.Name}}
+              <span class="badge badge-ghost">{{.SourceLanguage}}</span>
+            </h2>
+          {{end}}
+          <ul class="flex flex-col gap-2">
+            {{$series := .}}
+            {{range .Books}}
+              <li>
+                <button class="btn btn-ghost w-full justify-between h-auto py-3 normal-case"
+                        hx-get="/series/{{$series.Code}}/books/{{.Code}}"
+                        hx-target="#book-detail"
+                        hx-swap="innerHTML">
+                  <span class="flex flex-col items-start text-left">
+                    <span class="font-medium">{{.Title}}</span>
+                    <span class="text-xs opacity-60">{{.Author}} · {{.Code}}</span>
+                  </span>
+                  <span class="flex gap-1 flex-wrap justify-end">
+                    {{range .Targets}}
+                      <span class="badge {{template "status-class" .Status}}">{{.Language}}: {{.Status}}</span>
+                    {{end}}
+                  </span>
+                </button>
+              </li>
+            {{end}}
+          </ul>
+        </div>
+      </section>
+    {{end}}
+  </div>
+
+  <aside id="book-detail">
+    {{template "book-detail-empty"}}
+  </aside>
+</div>
+{{end}}
+
+{{define "status-class"}}{{if eq . "Translated"}}badge-success
+{{- else if eq . "Failed"}}badge-error
+{{- else if eq . "Translating"}}badge-info
+{{- else if eq . "Analyzing"}}badge-info
+{{- else if eq . "Dictionary Ready"}}badge-warning
+{{- else}}badge-neutral{{end -}}
+{{end}}
+
+{{define "book-detail-empty"}}
+<div class="card bg-base-100 shadow-sm">
+  <div class="card-body">
+    <p class="opacity-60">Select a Book to see its Translation Targets.</p>
+  </div>
+</div>
+{{end}}

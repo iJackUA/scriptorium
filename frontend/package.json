@@ -1,0 +1,13 @@
+{
+  "name": "scriptorium-frontend",
+  "private": true,
+  "scripts": {
+    "build": "tailwindcss -i src/app.css -o ../internal/ui/static/app.css --minify && node vendor-htmx.mjs"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
+    "daisyui": "^5.7.22",
+    "htmx.org": "^2.0.10",
+    "tailwindcss": "^4.3.3"
+  }
+}
