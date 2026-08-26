@@ -8,6 +8,10 @@
 # should point at a target in this file instead of repeating the command, so
 # there is one place to change when a command changes.
 
+# asdf gives every Go version its own GOPATH, so the Wails CLI has to be
+# installed once per Go toolchain and is found under the *current* one. Going
+# through `go env GOPATH` rather than PATH is what keeps this correct after a
+# Go upgrade; `make tools` is what fixes it when the binary is not there yet.
 WAILS := $(shell go env GOPATH)/bin/wails
 APP   := build/bin/scriptorium.app
 
@@ -25,6 +29,18 @@ setup: tools deps
 ## tools: install the Wails CLI for the current Go toolchain
 tools:
 	go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
+	@command -v asdf >/dev/null 2>&1 && asdf reshim golang || true
+
+# Fails with the fix rather than with "no such file or directory". This is the
+# first thing that breaks after a Go upgrade, because the new toolchain's GOPATH
+# starts out empty.
+require-wails:
+	@test -x $(WAILS) || { \
+		echo "Wails CLI not installed for $$(go version | cut -d' ' -f3)."; \
+		echo "Expected it at $(WAILS)"; \
+		echo "Run: make tools"; \
+		exit 1; \
+	}
 
 ## deps: download Go modules and frontend packages
 deps:
@@ -32,17 +48,17 @@ deps:
 	cd frontend && npm install
 
 ## doctor: check the machine has what Wails needs
-doctor:
+doctor: require-wails
 	$(WAILS) doctor
 
 # --- running -------------------------------------------------------------
 
 ## dev: run the app with live reload
-dev:
+dev: require-wails
 	$(WAILS) dev
 
 ## build: produce the packaged macOS application
-build:
+build: require-wails
 	$(WAILS) build
 
 ## run: build the app and open it
@@ -86,4 +102,4 @@ fmt-check:
 clean:
 	rm -rf build/bin
 
-.PHONY: help setup tools deps doctor dev build run assets check test vet fmt fmt-check clean
+.PHONY: help setup tools require-wails deps doctor dev build run assets check test vet fmt fmt-check clean
