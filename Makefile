@@ -81,6 +81,10 @@ check: fmt-check vet test
 test:
 	go test ./...
 
+## test-package: run tests for one Go package (make test-package PACKAGE=./internal/workspace)
+test-package:
+	go test $(PACKAGE)
+
 ## vet: run go vet
 vet:
 	go vet ./...

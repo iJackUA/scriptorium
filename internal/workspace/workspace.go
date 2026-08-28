@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -30,6 +31,73 @@ var ErrRootMissing = errors.New("workspace folder is missing")
 type Models struct {
 	Mechanical  string `toml:"mechanical"`
 	Translation string `toml:"translation"`
+}
+
+// SetTargetLanguages replaces the ordered Target Language allowlist and
+// returns the immediately-applicable Workspace configuration. It changes only
+// the languages assignment, preserving the rest of the hand-written file.
+func (w Workspace) SetTargetLanguages(tags []string) (Workspace, error) {
+	if err := validateTargetLanguages(tags); err != nil {
+		return Workspace{}, err
+	}
+
+	path := filepath.Join(w.Root, ConfigFile)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
+	}
+	lines := strings.Split(string(body), "\n")
+	replacement := "languages = [" + quotedTags(tags) + "]"
+	found := false
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "languages =") {
+			lines[i], found = replacement, true
+			break
+		}
+	}
+	if !found {
+		return Workspace{}, fmt.Errorf("read %s: no languages setting", ConfigFile)
+	}
+	updated := strings.Join(lines, "\n")
+	temporary, err := os.CreateTemp(w.Root, ".workspace.toml-*")
+	if err != nil {
+		return Workspace{}, fmt.Errorf("write %s: %w", ConfigFile, err)
+	}
+	name := temporary.Name()
+	defer os.Remove(name)
+	if _, err := temporary.WriteString(updated); err != nil {
+		temporary.Close()
+		return Workspace{}, fmt.Errorf("write %s: %w", ConfigFile, err)
+	}
+	if err := temporary.Close(); err != nil {
+		return Workspace{}, fmt.Errorf("write %s: %w", ConfigFile, err)
+	}
+	if err := os.Rename(name, path); err != nil {
+		return Workspace{}, fmt.Errorf("write %s: %w", ConfigFile, err)
+	}
+	return Open(w.Root)
+}
+
+func validateTargetLanguages(tags []string) error {
+	seen := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		if _, ok := LanguageFor(tag); !ok {
+			return fmt.Errorf("%q is not a canonical ISO 639-1 language tag", tag)
+		}
+		if seen[tag] {
+			return fmt.Errorf("target language %q is listed more than once", tag)
+		}
+		seen[tag] = true
+	}
+	return nil
+}
+
+func quotedTags(tags []string) string {
+	quoted := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		quoted = append(quoted, `"`+tag+`"`)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // Config is the contents of workspace.toml: the defaults every Series and Book
@@ -86,6 +154,9 @@ func Open(root string) (Workspace, error) {
 	if _, err := toml.DecodeFile(path, &config); err != nil {
 		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
 	}
+	if err := validateTargetLanguages(config.Languages); err != nil {
+		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
+	}
 	return Workspace{Root: root, Config: config}, nil
 }
 
@@ -103,7 +174,8 @@ const defaultConfig = `# Scriptorium workspace settings.
 agent = "claude"
 
 # The target languages offered when adding a Translation Target to a Book.
-languages = ["Ukrainian"]
+# Use canonical ISO 639-1 tags, for example "uk" for Ukrainian.
+languages = []
 
 # Models are named in the Agent's own vocabulary — these are what the claude
 # CLI accepts for --model. A Book may override them.

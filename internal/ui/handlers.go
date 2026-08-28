@@ -19,7 +19,22 @@ var templateFS embed.FS
 //go:embed static
 var staticFS embed.FS
 
-var templates = template.Must(template.ParseFS(templateFS, "templates/*.html"))
+var templates = template.Must(template.New("").Funcs(template.FuncMap{
+	"languageName": func(tag string) string {
+		if language, ok := workspace.LanguageFor(tag); ok {
+			return language.Name
+		}
+		return tag
+	},
+	"hasTag": func(tags []string, tag string) bool {
+		for _, candidate := range tags {
+			if candidate == tag {
+				return true
+			}
+		}
+		return false
+	},
+}).ParseFS(templateFS, "templates/*.html"))
 
 // routes wires the handler tree. Handlers are deliberately thin adapters over
 // the domain: the spec does not test them, which makes keeping them thin a
@@ -53,7 +68,10 @@ func routes(session *workspace.Session) http.Handler {
 
 	mux.HandleFunc("POST /series", s.createSeries)
 	mux.HandleFunc("POST /books", s.addBook)
+	mux.HandleFunc("POST /settings/target-languages", s.setTargetLanguages)
 	mux.HandleFunc("GET /series/{series}/books/{book}", s.bookDetail)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets", s.createTarget)
+	mux.HandleFunc("DELETE /series/{series}/books/{book}/targets/{target}", s.deleteTarget)
 	return mux
 }
 
@@ -125,10 +143,113 @@ func (s screens) bookDetail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	ws, _ := s.session.Current()
+	allowed := make([]targetOption, 0, len(ws.Config.Languages))
+	existing := make(map[string]library.Status, len(book.Targets))
+	for _, target := range book.Targets {
+		existing[target.Language] = target.Status
+	}
+	for _, tag := range ws.Config.Languages {
+		language, ok := workspace.LanguageFor(tag)
+		if ok && tag != series.SourceLanguage {
+			allowed = append(allowed, targetOption{Language: language, Status: existing[tag]})
+		}
+	}
 	fragment(w, "book-detail", struct {
-		Series library.Series
-		Book   library.Book
-	}{series, book})
+		Series  library.Series
+		Book    library.Book
+		Allowed []targetOption
+		Problem string
+	}{series, book, allowed, ""})
+}
+
+type targetOption struct {
+	workspace.Language
+	Status library.Status
+}
+
+func (s screens) setTargetLanguages(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		s.reply(w, r, form{Panel: "settings", Problem: err.Error()})
+		return
+	}
+	if err := s.session.SetTargetLanguages(r.Form["languages"]); err != nil {
+		s.reply(w, r, form{Panel: "settings", Problem: err.Error()})
+		return
+	}
+	s.reply(w, r, form{})
+}
+
+func (s screens) createTarget(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	seriesCode, bookCode, target := r.PathValue("series"), r.PathValue("book"), r.FormValue("language")
+	ws, _ := s.session.Current()
+	allowed := false
+	for _, tag := range ws.Config.Languages {
+		if tag == target {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		s.detail(w, r, "that Target Language is not enabled in Workspace settings")
+		return
+	}
+	if _, err := store.CreateTranslationTarget(seriesCode, bookCode, target, ws.Config.Languages); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	s.bookDetail(w, r)
+}
+
+func (s screens) deleteTarget(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	if err := store.DeleteTranslationTarget(r.PathValue("series"), r.PathValue("book"), r.PathValue("target")); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	s.bookDetail(w, r)
+}
+
+func (s screens) detail(w http.ResponseWriter, r *http.Request, problem string) {
+	store, ok := s.current()
+	if !ok {
+		s.reply(w, r, form{})
+		return
+	}
+	lib, err := store.Library()
+	if err != nil {
+		s.reply(w, r, form{})
+		return
+	}
+	series, book, ok := lib.Book(r.PathValue("series"), r.PathValue("book"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	ws, _ := s.session.Current()
+	allowed := make([]targetOption, 0, len(ws.Config.Languages))
+	existing := map[string]library.Status{}
+	for _, target := range book.Targets {
+		existing[target.Language] = target.Status
+	}
+	for _, tag := range ws.Config.Languages {
+		if language, ok := workspace.LanguageFor(tag); ok && tag != series.SourceLanguage {
+			allowed = append(allowed, targetOption{Language: language, Status: existing[tag]})
+		}
+	}
+	fragment(w, "book-detail", struct {
+		Series  library.Series
+		Book    library.Book
+		Allowed []targetOption
+		Problem string
+	}{series, book, allowed, problem})
 }
 
 // welcome is what a user with no workspace sees, and carries whatever the
@@ -137,8 +258,10 @@ type welcome struct{ Problem string }
 
 // libraryScreen is everything the library page renders.
 type libraryScreen struct {
-	Library library.Library
-	Form    form
+	Library         library.Library
+	Form            form
+	Languages       []workspace.Language
+	TargetLanguages []string
 }
 
 // The two panels the library page carries, named so that a rejection can
@@ -191,7 +314,8 @@ func (s screens) screen(typed form) (string, any) {
 		// that, so it is the screen they get.
 		return "welcome", welcome{Problem: err.Error()}
 	}
-	return "library", libraryScreen{Library: lib, Form: typed}
+	ws, _ := s.session.Current()
+	return "library", libraryScreen{Library: lib, Form: typed, Languages: workspace.Catalog(), TargetLanguages: ws.Config.Languages}
 }
 
 // current is the store for the open workspace, if one is open.

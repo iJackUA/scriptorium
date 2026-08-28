@@ -5,12 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Scriptorium</title>
   <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/tom-select.css">
   <script src="/static/htmx.min.js" defer></script>
+  <script src="/static/tom-select.min.js" defer></script>
 </head>
 <body class="bg-base-200 min-h-screen">
   <div class="navbar bg-base-100 shadow-sm">
     <span class="text-xl font-semibold px-4">Scriptorium</span>
   </div>
   <main id="app" class="p-6">{{.}}</main>
+  <script>
+    function languageControls(root) { root.querySelectorAll('select.language-select').forEach(function (select) { if (!select.tomselect) new TomSelect(select, {create: false, searchField: ['text', 'value']}); }); }
+    document.addEventListener('DOMContentLoaded', function () { languageControls(document); });
+    document.body.addEventListener('htmx:afterSwap', function (event) { languageControls(event.target); });
+    function syncBookSource() { var series = document.querySelector('select[name="series"]'), source = document.querySelector('#book-source-language'); if (series && source) source.disabled = series.value !== ''; }
+    document.addEventListener('change', function (event) { if (event.target.name === 'series') syncBookSource(); });
+    document.addEventListener('DOMContentLoaded', syncBookSource);
+    document.body.addEventListener('htmx:afterSwap', syncBookSource);
+  </script>
 </body>
 </html>{{end}}

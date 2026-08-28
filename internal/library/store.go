@@ -1,6 +1,7 @@
 package library
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
 // The names of the files and folders a Library is made of. They are exported
@@ -21,13 +23,18 @@ const (
 	BooksDir = "books"
 	// BookFile holds a Book's metadata.
 	BookFile = "book.toml"
+	// TranslationsDir holds a Book's Translation Targets.
+	TranslationsDir = "translations"
+	// StateFile holds a Translation Target's machine Status.
+	StateFile = "state.json"
 )
 
 var (
 	// ErrBookCodeTaken reports a Book Code already used in that Series.
 	ErrBookCodeTaken = errors.New("that Book Code is already used in this Series")
 	// ErrSeriesNotFound reports a Series that is not in the workspace.
-	ErrSeriesNotFound = errors.New("that Series is not in this workspace")
+	ErrSeriesNotFound          = errors.New("that Series is not in this workspace")
+	ErrTranslationTargetExists = errors.New("that Translation Target already exists")
 )
 
 // Store reads and writes the Series and Books of a Library as plain files
@@ -111,8 +118,11 @@ func (s Store) series(code string) (Series, error) {
 	if _, err := toml.DecodeFile(path, &file); err != nil {
 		return Series{}, fmt.Errorf("read %s: %w", filepath.Join(code, SeriesFile), err)
 	}
+	if _, ok := workspace.LanguageFor(file.SourceLanguage); !ok {
+		return Series{}, fmt.Errorf("read %s: %q is not a canonical ISO 639-1 source language tag", filepath.Join(code, SeriesFile), file.SourceLanguage)
+	}
 
-	books, err := s.books(code)
+	books, err := s.books(code, file.SourceLanguage)
 	if err != nil {
 		return Series{}, err
 	}
@@ -125,7 +135,7 @@ func (s Store) series(code string) (Series, error) {
 }
 
 // books reads the Books of one Series.
-func (s Store) books(seriesCode string) ([]Book, error) {
+func (s Store) books(seriesCode, sourceLanguage string) ([]Book, error) {
 	dir := filepath.Join(s.root, seriesCode, BooksDir)
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, os.ErrNotExist) {
@@ -149,7 +159,11 @@ func (s Store) books(seriesCode string) ([]Book, error) {
 			}
 			return nil, fmt.Errorf("read %s: %w", rel, err)
 		}
-		books = append(books, Book{Code: entry.Name(), Title: file.Title, Author: file.Author})
+		targets, err := s.translationTargets(seriesCode, entry.Name(), sourceLanguage)
+		if err != nil {
+			return nil, err
+		}
+		books = append(books, Book{Code: entry.Name(), Title: file.Title, Author: file.Author, Targets: targets})
 	}
 	slices.SortFunc(books, func(a, b Book) int { return strings.Compare(a.Code, b.Code) })
 	return books, nil
@@ -166,6 +180,9 @@ func (s Store) CreateSeries(name, sourceLanguage string) (Series, error) {
 	}
 	if sourceLanguage == "" {
 		return Series{}, errors.New("a Series needs a source language, so its Books know what they are being translated from")
+	}
+	if _, ok := workspace.LanguageFor(sourceLanguage); !ok {
+		return Series{}, fmt.Errorf("%q is not a canonical ISO 639-1 source language tag", sourceLanguage)
 	}
 
 	code, err := s.unusedSeriesCode(seriesCodeFor(name))
@@ -204,6 +221,9 @@ func (s Store) AddStandaloneBook(draft BookDraft, sourceLanguage string) (Series
 	if sourceLanguage == "" {
 		return Series{}, Book{}, errors.New("a Book needs a source language, so it is known what it is being translated from")
 	}
+	if _, ok := workspace.LanguageFor(sourceLanguage); !ok {
+		return Series{}, Book{}, fmt.Errorf("%q is not a canonical ISO 639-1 source language tag", sourceLanguage)
+	}
 	book, err := validatedDraft(draft)
 	if err != nil {
 		return Series{}, Book{}, err
@@ -225,6 +245,121 @@ func (s Store) AddStandaloneBook(draft BookDraft, sourceLanguage string) (Series
 	return Series{Code: code, Name: book.Title, SourceLanguage: sourceLanguage, Books: []Book{book}}, book, nil
 }
 
+// CreateTranslationTarget creates the durable identity and initial Status for
+// one target language of a Book. The temporary directory makes the pair appear
+// only once its complete state.json exists.
+func (s Store) CreateTranslationTarget(seriesCode, bookCode, targetLanguage string, allowed []string) (TranslationTarget, error) {
+	series, err := s.series(seriesCode)
+	if err != nil {
+		return TranslationTarget{}, err
+	}
+	if _, _, ok := (Library{Series: []Series{series}}).Book(seriesCode, bookCode); !ok {
+		return TranslationTarget{}, fmt.Errorf("Book %q is not in Series %q", bookCode, seriesCode)
+	}
+	if _, ok := workspace.LanguageFor(targetLanguage); !ok {
+		return TranslationTarget{}, fmt.Errorf("%q is not a canonical ISO 639-1 target language tag", targetLanguage)
+	}
+	if !slices.Contains(allowed, targetLanguage) {
+		return TranslationTarget{}, errors.New("that Target Language is not enabled in Workspace settings")
+	}
+	if targetLanguage == series.SourceLanguage {
+		return TranslationTarget{}, errors.New("a Translation Target must differ from the Source Language")
+	}
+	pair := languagePair(series.SourceLanguage, targetLanguage)
+	destination := filepath.Join(s.root, seriesCode, BooksDir, bookCode, TranslationsDir, pair)
+	if _, err := os.Stat(destination); err == nil {
+		return TranslationTarget{}, fmt.Errorf("%w: %s", ErrTranslationTargetExists, pair)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return TranslationTarget{}, fmt.Errorf("read %s: %w", filepath.Join(TranslationsDir, pair), err)
+	}
+	parent := filepath.Dir(destination)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return TranslationTarget{}, fmt.Errorf("create %s: %w", TranslationsDir, err)
+	}
+	temporary, err := os.MkdirTemp(parent, ".target-*")
+	if err != nil {
+		return TranslationTarget{}, fmt.Errorf("create Translation Target: %w", err)
+	}
+	defer os.RemoveAll(temporary)
+	state, err := json.Marshal(struct {
+		Status string `json:"status"`
+	}{Status: "new"})
+	if err != nil {
+		return TranslationTarget{}, fmt.Errorf("encode %s: %w", StateFile, err)
+	}
+	if err := os.WriteFile(filepath.Join(temporary, StateFile), state, 0o644); err != nil {
+		return TranslationTarget{}, fmt.Errorf("write %s: %w", StateFile, err)
+	}
+	if err := os.Rename(temporary, destination); err != nil {
+		return TranslationTarget{}, fmt.Errorf("create Translation Target: %w", err)
+	}
+	return TranslationTarget{Language: targetLanguage, Status: StatusNew}, nil
+}
+
+// DeleteTranslationTarget abandons only the requested language pair.
+func (s Store) DeleteTranslationTarget(seriesCode, bookCode, targetLanguage string) error {
+	series, err := s.series(seriesCode)
+	if err != nil {
+		return err
+	}
+	if _, _, ok := (Library{Series: []Series{series}}).Book(seriesCode, bookCode); !ok {
+		return fmt.Errorf("Book %q is not in Series %q", bookCode, seriesCode)
+	}
+	pair := languagePair(series.SourceLanguage, targetLanguage)
+	path := filepath.Join(s.root, seriesCode, BooksDir, bookCode, TranslationsDir, pair)
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("delete Translation Target %s: %w", pair, err)
+	}
+	return nil
+}
+
+func (s Store) translationTargets(seriesCode, bookCode, sourceLanguage string) ([]TranslationTarget, error) {
+	dir := filepath.Join(s.root, seriesCode, BooksDir, bookCode, TranslationsDir)
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", filepath.Join(seriesCode, BooksDir, bookCode, TranslationsDir), err)
+	}
+	var targets []TranslationTarget
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), sourceLanguage+"-to-") {
+			continue
+		}
+		tag := strings.TrimPrefix(entry.Name(), sourceLanguage+"-to-")
+		if _, ok := workspace.LanguageFor(tag); !ok {
+			return nil, fmt.Errorf("read Translation Target %s: unknown target language", entry.Name())
+		}
+		var state struct {
+			Status string `json:"status"`
+		}
+		if body, err := os.ReadFile(filepath.Join(dir, entry.Name(), StateFile)); err != nil {
+			return nil, fmt.Errorf("read Translation Target %s: %w", entry.Name(), err)
+		} else if err := json.Unmarshal(body, &state); err != nil {
+			return nil, fmt.Errorf("read Translation Target %s: %w", entry.Name(), err)
+		}
+		status, ok := statusFor(state.Status)
+		if !ok {
+			return nil, fmt.Errorf("read Translation Target %s: unknown status %q", entry.Name(), state.Status)
+		}
+		targets = append(targets, TranslationTarget{Language: tag, Status: status})
+	}
+	slices.SortFunc(targets, func(a, b TranslationTarget) int { return strings.Compare(a.Language, b.Language) })
+	return targets, nil
+}
+
+func languagePair(source, target string) string { return source + "-to-" + target }
+
+func statusFor(value string) (Status, bool) {
+	for _, status := range []Status{StatusNew, StatusAnalyzing, StatusDictionaryReady, StatusTranslating, StatusTranslated, StatusFailed} {
+		if value == strings.ToLower(strings.ReplaceAll(string(status), " ", "_")) {
+			return status, true
+		}
+	}
+	return "", false
+}
+
 // validatedBook checks a draft against the Series it is going into, and
 // returns the Book it describes.
 func (s Store) validatedBook(seriesCode string, draft BookDraft) (Book, error) {
@@ -236,10 +371,11 @@ func (s Store) validatedBook(seriesCode string, draft BookDraft) (Book, error) {
 		return Book{}, err
 	}
 
-	existing, err := s.books(seriesCode)
+	series, err := s.series(seriesCode)
 	if err != nil {
 		return Book{}, err
 	}
+	existing := series.Books
 	for _, b := range existing {
 		// Compared without case, because two codes differing only in case are
 		// two folders on Linux and one on macOS and Windows, and a library has

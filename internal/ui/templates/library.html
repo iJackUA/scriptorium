@@ -20,7 +20,7 @@
             {{if not .Standalone}}
               <h2 class="card-title">
                 {{.Name}}
-                <span class="badge badge-ghost">{{.SourceLanguage}}</span>
+                <span class="badge badge-ghost">{{languageName .SourceLanguage}} ({{.SourceLanguage}})</span>
               </h2>
             {{end}}
             <ul class="flex flex-col gap-2">
@@ -37,7 +37,7 @@
                     </span>
                     <span class="flex gap-1 flex-wrap justify-end">
                       {{range .Targets}}
-                        <span class="badge {{template "status-class" .Status}}">{{.Language}}: {{.Status}}</span>
+                        <span class="badge {{template "status-class" .Status}}">{{languageName .Language}} ({{.Language}}): {{.Status}}</span>
                       {{end}}
                     </span>
                   </button>
@@ -54,6 +54,23 @@
     </aside>
   </div>
 </div>
+
+{{$settingsForm := .Form.For "settings"}}
+<details class="collapse collapse-arrow bg-base-100 shadow-sm" {{if $settingsForm.Panel}}open{{end}}>
+  <summary class="collapse-title font-medium">Workspace settings</summary>
+  <div class="collapse-content">
+    <form hx-post="/settings/target-languages" hx-target="#app" hx-swap="innerHTML" class="flex flex-col gap-2">
+      {{template "form-problem" $settingsForm.Problem}}
+      <fieldset class="fieldset"><legend class="fieldset-legend">Target Languages</legend>
+        <select name="languages" multiple class="select w-full language-select" data-testid="target-languages">
+          {{range .Languages}}<option value="{{.Tag}}" {{if hasTag $.TargetLanguages .Tag}}selected{{end}}>{{.Name}} ({{.Tag}})</option>{{end}}
+        </select>
+        <p class="label">Removing a language preserves existing Translation Targets, but prevents creating new ones.</p>
+      </fieldset>
+      <button class="btn btn-primary" type="submit">Save Target Languages</button>
+    </form>
+  </div>
+</details>
 {{end}}
 
 {{/*
@@ -95,7 +112,7 @@
         </fieldset>
         <fieldset class="fieldset">
           <legend class="fieldset-legend">Source language</legend>
-          <input name="language" class="input w-full" value="{{$bookForm.Language}}">
+          <select name="language" class="select w-full language-select" id="book-source-language"><option value="">Choose a Source Language</option>{{range .Languages}}<option value="{{.Tag}}" {{if eq $bookForm.Language .Tag}}selected{{end}}>{{.Name}} ({{.Tag}})</option>{{end}}</select>
           <p class="label">
             Only for a Book on its own. A Book joining a Series takes the
             Series' source language.
@@ -136,7 +153,7 @@
         </fieldset>
         <fieldset class="fieldset">
           <legend class="fieldset-legend">Source language</legend>
-          <input name="language" required class="input w-full" value="{{$seriesForm.Language}}">
+          <select name="language" required class="select w-full language-select"><option value="">Choose a Source Language</option>{{range .Languages}}<option value="{{.Tag}}" {{if eq $seriesForm.Language .Tag}}selected{{end}}>{{.Name}} ({{.Tag}})</option>{{end}}</select>
           <p class="label">Set once here; every Book in the Series inherits it.</p>
         </fieldset>
         <button class="btn btn-primary mt-2" type="submit">Create Series</button>

@@ -25,7 +25,7 @@ func read(t *testing.T, path string) string {
 func TestCreatingASeriesWritesItsConfig(t *testing.T) {
 	s := store(t)
 
-	series, err := s.CreateSeries("The Adventures of Sherlock Holmes", "English")
+	series, err := s.CreateSeries("The Adventures of Sherlock Holmes", "en")
 	if err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestCreatingASeriesWritesItsConfig(t *testing.T) {
 		t.Errorf("Code = %q", series.Code)
 	}
 	written := read(t, filepath.Join(s.root, series.Code, SeriesFile))
-	for _, want := range []string{"The Adventures of Sherlock Holmes", "English"} {
+	for _, want := range []string{"The Adventures of Sherlock Holmes", "en"} {
 		if !strings.Contains(written, want) {
 			t.Errorf("%s does not carry %q:\n%s", SeriesFile, want, written)
 		}
@@ -45,11 +45,91 @@ func TestCreatingASeriesWritesItsConfig(t *testing.T) {
 	}
 }
 
+func TestSeriesRequireCanonicalSourceLanguageTags(t *testing.T) {
+	s := store(t)
+	for _, source := range []string{"English", "EN", "zz"} {
+		if _, err := s.CreateSeries("Solaris", source); err == nil {
+			t.Errorf("CreateSeries accepted %q", source)
+		}
+	}
+	if entries, _ := os.ReadDir(s.root); len(entries) != 0 {
+		t.Errorf("invalid source languages wrote %v", entries)
+	}
+}
+
+func TestCreatingATranslationTargetWritesNewState(t *testing.T) {
+	s := store(t)
+	series, err := s.CreateSeries("Solaris", "pl")
+	if err != nil {
+		t.Fatalf("CreateSeries: %v", err)
+	}
+	if _, err := s.AddBook(series.Code, BookDraft{Code: "solaris"}); err != nil {
+		t.Fatalf("AddBook: %v", err)
+	}
+
+	target, err := s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	if err != nil {
+		t.Fatalf("CreateTranslationTarget: %v", err)
+	}
+	if target.Language != "uk" || target.Status != StatusNew {
+		t.Errorf("target = %+v, want Ukrainian/New", target)
+	}
+	state := read(t, filepath.Join(s.root, series.Code, BooksDir, "solaris", TranslationsDir, "pl-to-uk", StateFile))
+	if strings.TrimSpace(state) != `{"status":"new"}` {
+		t.Errorf("state.json = %q", state)
+	}
+
+	lib, err := s.Library()
+	if err != nil {
+		t.Fatalf("Library: %v", err)
+	}
+	if got := lib.Series[0].Books[0].Targets; len(got) != 1 || got[0] != target {
+		t.Errorf("Targets = %+v, want [%+v]", got, target)
+	}
+}
+
+func TestTranslationTargetRejectsInvalidPairsWithoutWriting(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	for _, target := range []string{"pl", "Ukrainian", "zz", "uk"} {
+		_, err := s.CreateTranslationTarget(series.Code, "solaris", target, []string{"uk"})
+		if target == "uk" && err == nil {
+			continue
+		}
+		if err == nil {
+			t.Errorf("CreateTranslationTarget(%q) succeeded", target)
+		}
+	}
+	if _, err := s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"}); err == nil {
+		t.Error("duplicate Translation Target succeeded")
+	}
+	if _, err := s.CreateTranslationTarget(series.Code, "solaris", "de", []string{"uk"}); err == nil {
+		t.Error("disabled Target Language succeeded")
+	}
+}
+
+func TestMalformedTranslationTargetStateIsAReadError(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	path := filepath.Join(s.root, series.Code, BooksDir, "solaris", TranslationsDir, "pl-to-uk")
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("seed target: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(path, StateFile), []byte(`{"status":"wat"}`), 0o644); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+	if _, err := s.Library(); err == nil || !strings.Contains(err.Error(), "pl-to-uk") {
+		t.Errorf("Library error = %v, want target-specific read error", err)
+	}
+}
+
 // The defaults a Series may override are what makes series.toml worth
 // hand-editing, so the written file has to name them.
 func TestTheCreatedSeriesConfigNamesTheDefaultsItCanCarry(t *testing.T) {
 	s := store(t)
-	series, err := s.CreateSeries("Solaris", "Polish")
+	series, err := s.CreateSeries("Solaris", "pl")
 	if err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
@@ -66,7 +146,7 @@ func TestASeriesNeedsANameAndASourceLanguage(t *testing.T) {
 	s := store(t)
 
 	for name, args := range map[string][2]string{
-		"no name":            {"  ", "English"},
+		"no name":            {"  ", "en"},
 		"no source language": {"Solaris", ""},
 	} {
 		if _, err := s.CreateSeries(args[0], args[1]); err == nil {
@@ -84,11 +164,11 @@ func TestASeriesNeedsANameAndASourceLanguage(t *testing.T) {
 func TestTwoSeriesOfTheSameNameGetDifferentFolders(t *testing.T) {
 	s := store(t)
 
-	first, err := s.CreateSeries("Solaris", "Polish")
+	first, err := s.CreateSeries("Solaris", "pl")
 	if err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
-	second, err := s.CreateSeries("Solaris", "Polish")
+	second, err := s.CreateSeries("Solaris", "pl")
 	if err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
@@ -103,7 +183,7 @@ func TestTwoSeriesOfTheSameNameGetDifferentFolders(t *testing.T) {
 
 func TestAddingABookWritesItsConfigUnderTheSeries(t *testing.T) {
 	s := store(t)
-	series, err := s.CreateSeries("The Adventures of Sherlock Holmes", "English")
+	series, err := s.CreateSeries("The Adventures of Sherlock Holmes", "en")
 	if err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
@@ -126,7 +206,7 @@ func TestAddingABookWritesItsConfigUnderTheSeries(t *testing.T) {
 
 func TestABookCodeAlreadyUsedInThatSeriesIsRejected(t *testing.T) {
 	s := store(t)
-	series, err := s.CreateSeries("Solaris", "Polish")
+	series, err := s.CreateSeries("Solaris", "pl")
 	if err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
@@ -152,8 +232,8 @@ func TestABookCodeAlreadyUsedInThatSeriesIsRejected(t *testing.T) {
 // unique within a Series, not across the workspace.
 func TestTheSameBookCodeInAnotherSeriesIsFine(t *testing.T) {
 	s := store(t)
-	first, _ := s.CreateSeries("Solaris", "Polish")
-	second, _ := s.CreateSeries("Eden", "Polish")
+	first, _ := s.CreateSeries("Solaris", "pl")
+	second, _ := s.CreateSeries("Eden", "pl")
 
 	if _, err := s.AddBook(first.Code, BookDraft{Code: "novel", Title: "Solaris"}); err != nil {
 		t.Fatalf("AddBook: %v", err)
@@ -168,7 +248,7 @@ func TestTheSameBookCodeInAnotherSeriesIsFine(t *testing.T) {
 // clash is reported rather than left to the filesystem.
 func TestABookCodeDifferingOnlyInCaseIsRejected(t *testing.T) {
 	s := store(t)
-	series, _ := s.CreateSeries("Solaris", "Polish")
+	series, _ := s.CreateSeries("Solaris", "pl")
 	if _, err := s.AddBook(series.Code, BookDraft{Code: "solaris", Title: "Solaris"}); err != nil {
 		t.Fatalf("AddBook: %v", err)
 	}
@@ -180,7 +260,7 @@ func TestABookCodeDifferingOnlyInCaseIsRejected(t *testing.T) {
 
 func TestABookCodeThatCannotNameAFolderIsRejectedBeforeAnythingIsWritten(t *testing.T) {
 	s := store(t)
-	series, err := s.CreateSeries("Solaris", "Polish")
+	series, err := s.CreateSeries("Solaris", "pl")
 	if err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
@@ -205,7 +285,7 @@ func TestABookCodeThatCannotNameAFolderIsRejectedBeforeAnythingIsWritten(t *test
 // and the only thing they can be held to.
 func TestABookNeedsNothingButItsCode(t *testing.T) {
 	s := store(t)
-	series, _ := s.CreateSeries("Solaris", "Polish")
+	series, _ := s.CreateSeries("Solaris", "pl")
 
 	book, err := s.AddBook(series.Code, BookDraft{Code: "solaris"})
 	if err != nil {
@@ -242,12 +322,12 @@ func TestAddingABookToASeriesThatIsNotThereIsReported(t *testing.T) {
 func TestAStandaloneBookLivesInARealSeriesOfOne(t *testing.T) {
 	s := store(t)
 
-	series, book, err := s.AddStandaloneBook(BookDraft{Code: "solaris", Title: "Solaris", Author: "Stanisław Lem"}, "Polish")
+	series, book, err := s.AddStandaloneBook(BookDraft{Code: "solaris", Title: "Solaris", Author: "Stanisław Lem"}, "pl")
 	if err != nil {
 		t.Fatalf("AddStandaloneBook: %v", err)
 	}
 
-	if got := read(t, filepath.Join(s.root, series.Code, SeriesFile)); !strings.Contains(got, "Polish") {
+	if got := read(t, filepath.Join(s.root, series.Code, SeriesFile)); !strings.Contains(got, "pl") {
 		t.Errorf("the Series of one carries no source language:\n%s", got)
 	}
 	if _, err := os.Stat(filepath.Join(s.root, series.Code, BooksDir, book.Code, BookFile)); err != nil {
@@ -286,11 +366,11 @@ func TestAStandaloneBookLivesInARealSeriesOfOne(t *testing.T) {
 func TestTwoStandaloneBooksOfTheSameCodeGetTheirOwnSeries(t *testing.T) {
 	s := store(t)
 
-	first, _, err := s.AddStandaloneBook(BookDraft{Code: "novel", Title: "Solaris"}, "Polish")
+	first, _, err := s.AddStandaloneBook(BookDraft{Code: "novel", Title: "Solaris"}, "pl")
 	if err != nil {
 		t.Fatalf("AddStandaloneBook: %v", err)
 	}
-	second, _, err := s.AddStandaloneBook(BookDraft{Code: "novel", Title: "Eden"}, "Polish")
+	second, _, err := s.AddStandaloneBook(BookDraft{Code: "novel", Title: "Eden"}, "pl")
 	if err != nil {
 		t.Fatalf("AddStandaloneBook: %v", err)
 	}
@@ -313,7 +393,7 @@ func TestTwoStandaloneBooksOfTheSameCodeGetTheirOwnSeries(t *testing.T) {
 func TestTheSeriesOfOneKeepsTheBookCodeAsTyped(t *testing.T) {
 	s := store(t)
 
-	series, book, err := s.AddStandaloneBook(BookDraft{Code: "Solaris", Title: "Solaris"}, "Polish")
+	series, book, err := s.AddStandaloneBook(BookDraft{Code: "Solaris", Title: "Solaris"}, "pl")
 	if err != nil {
 		t.Fatalf("AddStandaloneBook: %v", err)
 	}
@@ -330,7 +410,7 @@ func TestTheSeriesOfOneKeepsTheBookCodeAsTyped(t *testing.T) {
 func TestAStandaloneBookWithAnUnusableCodeIsRejectedBeforeAnythingIsWritten(t *testing.T) {
 	s := store(t)
 
-	if _, _, err := s.AddStandaloneBook(BookDraft{Code: "no/slashes", Title: "Solaris"}, "Polish"); !errors.Is(err, ErrInvalidBookCode) {
+	if _, _, err := s.AddStandaloneBook(BookDraft{Code: "no/slashes", Title: "Solaris"}, "pl"); !errors.Is(err, ErrInvalidBookCode) {
 		t.Fatalf("got %v, want ErrInvalidBookCode", err)
 	}
 	if entries, _ := os.ReadDir(s.root); len(entries) != 0 {
@@ -350,13 +430,13 @@ func TestAnEmptyWorkspaceReadsAsAnEmptyLibrary(t *testing.T) {
 
 func TestTheLibraryIsReadInAStableOrder(t *testing.T) {
 	s := store(t)
-	series, _ := s.CreateSeries("Holmes", "English")
+	series, _ := s.CreateSeries("Holmes", "en")
 	for _, code := range []string{"return", "adventures", "memoirs"} {
 		if _, err := s.AddBook(series.Code, BookDraft{Code: code, Title: code}); err != nil {
 			t.Fatalf("AddBook %s: %v", code, err)
 		}
 	}
-	if _, err := s.CreateSeries("Anthology", "English"); err != nil {
+	if _, err := s.CreateSeries("Anthology", "en"); err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
 
@@ -380,7 +460,7 @@ func TestTheLibraryIsReadInAStableOrder(t *testing.T) {
 // notes of their own beside it. Neither is a Series.
 func TestFilesAndFoldersThatAreNotSeriesAreIgnored(t *testing.T) {
 	s := store(t)
-	if _, err := s.CreateSeries("Solaris", "Polish"); err != nil {
+	if _, err := s.CreateSeries("Solaris", "pl"); err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(s.root, "workspace.toml"), []byte("agent = \"claude\"\n"), 0o644); err != nil {
@@ -431,7 +511,7 @@ func TestReadingAWorkspaceThatIsNoLongerThereIsReported(t *testing.T) {
 
 func TestABookFolderWithNoConfigIsNotABook(t *testing.T) {
 	s := store(t)
-	series, _ := s.CreateSeries("Solaris", "Polish")
+	series, _ := s.CreateSeries("Solaris", "pl")
 	if err := os.MkdirAll(filepath.Join(s.root, series.Code, BooksDir, "half-made"), 0o755); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -450,7 +530,7 @@ func TestABookFolderWithNoConfigIsNotABook(t *testing.T) {
 func TestNamesHoldingQuotesAndBackslashesReadBackUnchanged(t *testing.T) {
 	s := store(t)
 	seriesName := `"Quoted" \ Series`
-	series, err := s.CreateSeries(seriesName, "English")
+	series, err := s.CreateSeries(seriesName, "en")
 	if err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
@@ -478,7 +558,7 @@ func TestNamesHoldingQuotesAndBackslashesReadBackUnchanged(t *testing.T) {
 
 func TestABookIsFoundBySeriesAndCode(t *testing.T) {
 	s := store(t)
-	series, _ := s.CreateSeries("Holmes", "English")
+	series, _ := s.CreateSeries("Holmes", "en")
 	if _, err := s.AddBook(series.Code, BookDraft{Code: "memoirs", Title: "The Memoirs of Sherlock Holmes"}); err != nil {
 		t.Fatalf("AddBook: %v", err)
 	}
@@ -491,7 +571,7 @@ func TestABookIsFoundBySeriesAndCode(t *testing.T) {
 	if !ok {
 		t.Fatal("the Book was not found")
 	}
-	if found.SourceLanguage != "English" || book.Title != "The Memoirs of Sherlock Holmes" {
+	if found.SourceLanguage != "en" || book.Title != "The Memoirs of Sherlock Holmes" {
 		t.Errorf("found %+v / %+v", found, book)
 	}
 	if _, _, ok := lib.Book(series.Code, "nope"); ok {

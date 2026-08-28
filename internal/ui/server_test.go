@@ -28,7 +28,7 @@ func seedLibrary(t *testing.T, root string) library.Store {
 	t.Helper()
 	store := library.NewStore(root)
 
-	holmes, err := store.CreateSeries("The Adventures of Sherlock Holmes", "English")
+	holmes, err := store.CreateSeries("The Adventures of Sherlock Holmes", "en")
 	if err != nil {
 		t.Fatalf("CreateSeries: %v", err)
 	}
@@ -41,7 +41,7 @@ func seedLibrary(t *testing.T, root string) library.Store {
 			t.Fatalf("AddBook %s: %v", book.Code, err)
 		}
 	}
-	if _, _, err := store.AddStandaloneBook(library.BookDraft{Code: "solaris", Title: "Solaris", Author: "Stanisław Lem"}, "Polish"); err != nil {
+	if _, _, err := store.AddStandaloneBook(library.BookDraft{Code: "solaris", Title: "Solaris", Author: "Stanisław Lem"}, "pl"); err != nil {
 		t.Fatalf("AddStandaloneBook: %v", err)
 	}
 	return store
@@ -192,7 +192,7 @@ func TestBookDetailIsServedForHtmx(t *testing.T) {
 		t.Fatalf("got %d, want %d", rec.Code, http.StatusOK)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"The Memoirs of Sherlock Holmes", "Arthur Conan Doyle", "memoirs", "English"} {
+	for _, want := range []string{"The Memoirs of Sherlock Holmes", "Arthur Conan Doyle", "memoirs", "English", "en"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("book detail is missing %q", want)
 		}

@@ -110,6 +110,22 @@ func (s *Session) Choose() {
 	s.current, s.problem = &ws, ""
 }
 
+// SetTargetLanguages updates the open Workspace and makes the new allowlist
+// available to this running session immediately.
+func (s *Session) SetTargetLanguages(tags []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current == nil {
+		return errors.New("no Workspace is open")
+	}
+	updated, err := s.current.SetTargetLanguages(tags)
+	if err != nil {
+		return err
+	}
+	s.current = &updated
+	return nil
+}
+
 // report records a failure for the user to read, leaving any open workspace
 // alone — a failed attempt to open a different folder is no reason to close
 // the one that works.

@@ -2,21 +2,30 @@
 <div class="card bg-base-100 shadow-sm">
   <div class="card-body gap-3">
     <h2 class="card-title">{{.Book.Label}}</h2>
+    {{template "form-problem" .Problem}}
     {{with .Book.Author}}<p class="text-sm opacity-70">{{.}}</p>{{end}}
     <dl class="text-sm grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
       <dt class="opacity-60">Book Code</dt><dd><code>{{.Book.Code}}</code></dd>
       <dt class="opacity-60">Series</dt><dd>{{.Series.Name}}</dd>
-      <dt class="opacity-60">Source language</dt><dd>{{.Series.SourceLanguage}}</dd>
+      <dt class="opacity-60">Source language</dt><dd>{{languageName .Series.SourceLanguage}} ({{.Series.SourceLanguage}})</dd>
     </dl>
     <div class="divider my-1">Translation Targets</div>
     <ul class="flex flex-col gap-2">
       {{range .Book.Targets}}
         <li class="flex items-center justify-between">
-          <span>{{.Language}}</span>
+          <span>{{languageName .Language}} ({{.Language}})</span>
           <span class="badge {{template "status-class" .Status}}">{{.Status}}</span>
+          <button class="btn btn-error btn-xs" type="button" onclick="this.nextElementSibling.showModal()">Delete</button>
+          <dialog class="modal"><div class="modal-box"><p>Delete this Translation Target?</p><div class="modal-action"><form method="dialog"><button class="btn">Cancel</button></form><button class="btn btn-error" hx-delete="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{.Language}}" hx-target="#book-detail" hx-swap="innerHTML">Delete</button></div></div></dialog>
         </li>
       {{end}}
     </ul>
+    {{if .Allowed}}
+    <form class="flex gap-2" hx-post="/series/{{.Series.Code}}/books/{{.Book.Code}}/targets" hx-target="#book-detail" hx-swap="innerHTML">
+      <select name="language" class="select flex-1 language-select"><option value="">Add a Translation Target</option>{{range .Allowed}}<option value="{{.Tag}}" {{if .Status}}disabled{{end}}>{{.Name}} ({{.Tag}}){{with .Status}} — {{.}}{{end}}</option>{{end}}</select>
+      <button class="btn btn-primary" type="submit">Add</button>
+    </form>
+    {{else}}<p class="opacity-60">Enable a Target Language in Workspace settings before creating a Translation Target.</p>{{end}}
   </div>
 </div>
 {{end}}

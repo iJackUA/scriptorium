@@ -34,7 +34,7 @@ func newEmptyLibraryServer(t *testing.T) (*Server, string) {
 func TestCreatingASeriesShowsItInTheLibrary(t *testing.T) {
 	s, root := newEmptyLibraryServer(t)
 
-	rec := postForm(s, "/series", url.Values{"name": {"Solaris"}, "language": {"Polish"}})
+	rec := postForm(s, "/series", url.Values{"name": {"Solaris"}, "language": {"pl"}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d, want %d", rec.Code, http.StatusOK)
 	}
@@ -55,7 +55,7 @@ func TestCreatingASeriesShowsItInTheLibrary(t *testing.T) {
 
 func TestAddingABookToASeriesShowsItUnderThatSeries(t *testing.T) {
 	s, root := newEmptyLibraryServer(t)
-	if rec := postForm(s, "/series", url.Values{"name": {"Solaris"}, "language": {"Polish"}}); rec.Code != http.StatusOK {
+	if rec := postForm(s, "/series", url.Values{"name": {"Solaris"}, "language": {"pl"}}); rec.Code != http.StatusOK {
 		t.Fatalf("CreateSeries: got %d", rec.Code)
 	}
 
@@ -82,7 +82,7 @@ func TestABookAddedOnItsOwnRendersFlat(t *testing.T) {
 	s, root := newEmptyLibraryServer(t)
 
 	rec := postForm(s, "/books", url.Values{
-		"series": {""}, "code": {"solaris"}, "title": {"Solaris"}, "author": {"Stanisław Lem"}, "language": {"Polish"},
+		"series": {""}, "code": {"solaris"}, "title": {"Solaris"}, "author": {"Stanisław Lem"}, "language": {"pl"},
 	})
 	body := rec.Body.String()
 	if strings.Contains(body, "form-problem") {
@@ -163,7 +163,7 @@ func TestARejectedBookLeavesTheWorkspaceAlone(t *testing.T) {
 func TestABookCanBeAddedWithNothingButItsCode(t *testing.T) {
 	s, root := newEmptyLibraryServer(t)
 
-	rec := postForm(s, "/books", url.Values{"series": {""}, "code": {"solaris"}, "language": {"Polish"}})
+	rec := postForm(s, "/books", url.Values{"series": {""}, "code": {"solaris"}, "language": {"pl"}})
 	body := rec.Body.String()
 	if strings.Contains(body, "form-problem") {
 		t.Fatalf("a Book with no title was rejected:\n%s", body)
@@ -174,6 +174,32 @@ func TestABookCanBeAddedWithNothingButItsCode(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "solaris", "books", "solaris", "book.toml")); err != nil {
 		t.Errorf("book.toml was not written: %v", err)
+	}
+}
+
+func TestWorkspaceTargetLanguagesCreateAndRenderTranslationTargets(t *testing.T) {
+	s, root := newEmptyLibraryServer(t)
+	if body := serve(s, request(s, "/")).Body.String(); !strings.Contains(body, "Workspace settings") {
+		t.Fatal("Workspace settings are not reachable from the library")
+	}
+	if body := postForm(s, "/settings/target-languages", url.Values{"languages": {"uk", "de"}}).Body.String(); !strings.Contains(body, "uk") {
+		t.Fatalf("updated Target Languages are not shown: %s", body)
+	}
+	if rec := postForm(s, "/series", url.Values{"name": {"Solaris"}, "language": {"pl"}}); strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("CreateSeries: %s", rec.Body.String())
+	}
+	if rec := postForm(s, "/books", url.Values{"series": {"solaris"}, "code": {"solaris"}}); strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("AddBook: %s", rec.Body.String())
+	}
+	if body := serve(s, request(s, "/series/solaris/books/solaris")).Body.String(); !strings.Contains(body, "Ukrainian (uk)") {
+		t.Fatalf("Book details do not offer allowlisted languages: %s", body)
+	}
+	rec := postForm(s, "/series/solaris/books/solaris/targets", url.Values{"language": {"uk"}})
+	if body := rec.Body.String(); !strings.Contains(body, "Ukrainian (uk)") || !strings.Contains(body, "New") {
+		t.Fatalf("Translation Target is not rendered: %s", body)
+	}
+	if _, err := os.Stat(filepath.Join(root, "solaris", "books", "solaris", "translations", "pl-to-uk", "state.json")); err != nil {
+		t.Fatalf("target state was not written: %v", err)
 	}
 }
 
@@ -196,8 +222,8 @@ func TestAWorkspaceThatCannotBeWrittenToIsReportedOnScreen(t *testing.T) {
 	}
 
 	for path, values := range map[string]url.Values{
-		"/series": {"name": {"Solaris"}, "language": {"Polish"}},
-		"/books":  {"series": {""}, "code": {"solaris"}, "language": {"Polish"}},
+		"/series": {"name": {"Solaris"}, "language": {"pl"}},
+		"/books":  {"series": {""}, "code": {"solaris"}, "language": {"pl"}},
 	} {
 		body := postForm(s, path, values).Body.String()
 		if !strings.Contains(body, "form-problem") {
