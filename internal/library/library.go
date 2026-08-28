@@ -32,6 +32,19 @@ type Book struct {
 	Targets []TranslationTarget
 }
 
+// Label is what to call the Book on screen.
+//
+// A Book exists before its Source File does, and the title comes out of that
+// file — read from an fb2's description, inferred from a txt's opening pages.
+// Until then the Book Code is the only name it has, and it is one the user
+// chose, so it is a perfectly good one to show them.
+func (b Book) Label() string {
+	if b.Title != "" {
+		return b.Title
+	}
+	return b.Code
+}
+
 // Series is a named group of Books sharing a source language, a Dictionary and
 // translation settings. A standalone Book is a Series containing one Book.
 type Series struct {

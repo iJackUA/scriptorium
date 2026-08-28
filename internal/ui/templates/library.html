@@ -1,45 +1,157 @@
 {{define "library"}}
-<div class="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-6">
-  <div class="flex flex-col gap-6">
-    {{range .Series}}
-      <section class="card bg-base-100 shadow-sm">
-        <div class="card-body gap-4">
-          {{if not .Standalone}}
-            <h2 class="card-title">
-              {{.Name}}
-              <span class="badge badge-ghost">{{.SourceLanguage}}</span>
-            </h2>
-          {{end}}
-          <ul class="flex flex-col gap-2">
-            {{$series := .}}
-            {{range .Books}}
-              <li>
-                <button class="btn btn-ghost w-full justify-between h-auto py-3 normal-case"
-                        hx-get="/series/{{$series.Code}}/books/{{.Code}}"
-                        hx-target="#book-detail"
-                        hx-swap="innerHTML">
-                  <span class="flex flex-col items-start text-left">
-                    <span class="font-medium">{{.Title}}</span>
-                    <span class="text-xs opacity-60">{{.Author}} · {{.Code}}</span>
-                  </span>
-                  <span class="flex gap-1 flex-wrap justify-end">
-                    {{range .Targets}}
-                      <span class="badge {{template "status-class" .Status}}">{{.Language}}: {{.Status}}</span>
-                    {{end}}
-                  </span>
-                </button>
-              </li>
-            {{end}}
-          </ul>
-        </div>
-      </section>
-    {{end}}
-  </div>
+<div class="flex flex-col gap-6">
+  {{template "library-forms" .}}
 
-  <aside id="book-detail">
-    {{template "book-detail-empty"}}
-  </aside>
+  <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] gap-6">
+    <div class="flex flex-col gap-6">
+      {{if not .Library.Series}}
+        <div class="card bg-base-100 shadow-sm">
+          <div class="card-body">
+            <p class="opacity-60" data-testid="empty-library">
+              Nothing here yet. Add a Book, and it gets a folder of its own in
+              your workspace.
+            </p>
+          </div>
+        </div>
+      {{end}}
+      {{range .Library.Series}}
+        <section class="card bg-base-100 shadow-sm">
+          <div class="card-body gap-4">
+            {{if not .Standalone}}
+              <h2 class="card-title">
+                {{.Name}}
+                <span class="badge badge-ghost">{{.SourceLanguage}}</span>
+              </h2>
+            {{end}}
+            <ul class="flex flex-col gap-2">
+              {{$series := .}}
+              {{range .Books}}
+                <li>
+                  <button class="btn btn-ghost w-full justify-between h-auto py-3 normal-case"
+                          hx-get="/series/{{$series.Code}}/books/{{.Code}}"
+                          hx-target="#book-detail"
+                          hx-swap="innerHTML">
+                    <span class="flex flex-col items-start text-left">
+                      <span class="font-medium">{{.Label}}</span>
+                      <span class="text-xs opacity-60">{{with .Author}}{{.}} · {{end}}{{.Code}}</span>
+                    </span>
+                    <span class="flex gap-1 flex-wrap justify-end">
+                      {{range .Targets}}
+                        <span class="badge {{template "status-class" .Status}}">{{.Language}}: {{.Status}}</span>
+                      {{end}}
+                    </span>
+                  </button>
+                </li>
+              {{end}}
+            </ul>
+          </div>
+        </section>
+      {{end}}
+    </div>
+
+    <aside id="book-detail">
+      {{template "book-detail-empty"}}
+    </aside>
+  </div>
 </div>
+{{end}}
+
+{{/*
+  Both panels post the whole library screen back, so a rejection arrives with
+  the fields still filled in and the panel it came from still open. There is no
+  client-side state to lose, which is why the server can hand it all back.
+*/}}
+{{define "library-forms"}}
+{{$bookForm := .Form.For "book"}}
+{{$seriesForm := .Form.For "series"}}
+<div class="flex flex-col gap-3 lg:flex-row lg:items-start">
+  <details class="collapse collapse-arrow bg-base-100 shadow-sm flex-1" {{if $bookForm.Panel}}open{{end}}>
+    <summary class="collapse-title font-medium">Add a Book</summary>
+    <div class="collapse-content">
+      <form class="flex flex-col gap-2"
+            hx-post="/books"
+            hx-target="#app"
+            hx-swap="innerHTML">
+        {{template "form-problem" $bookForm.Problem}}
+        <fieldset class="fieldset">
+          <legend class="fieldset-legend">Book Code</legend>
+          <input name="code" required class="input w-full" placeholder="memoirs"
+                 value="{{$bookForm.Code}}">
+          <p class="label">
+            Letters, digits, hyphens and underscores. This names the Book's
+            folder on disk.
+          </p>
+        </fieldset>
+        <fieldset class="fieldset">
+          <legend class="fieldset-legend">Series</legend>
+          <select name="series" class="select w-full">
+            <option value="">On its own</option>
+            {{range .Library.Series}}
+              <option value="{{.Code}}" {{if eq $bookForm.Series .Code}}selected{{end}}>
+                {{.Name}} ({{.SourceLanguage}})
+              </option>
+            {{end}}
+          </select>
+        </fieldset>
+        <fieldset class="fieldset">
+          <legend class="fieldset-legend">Source language</legend>
+          <input name="language" class="input w-full" value="{{$bookForm.Language}}">
+          <p class="label">
+            Only for a Book on its own. A Book joining a Series takes the
+            Series' source language.
+          </p>
+        </fieldset>
+        {{/*
+          Title and author come out of the Source File, which does not exist
+          yet — so they are offered to a user who happens to know them, and
+          left empty for the upload to fill in otherwise.
+        */}}
+        <fieldset class="fieldset">
+          <legend class="fieldset-legend">Title <span class="opacity-50">(optional)</span></legend>
+          <input name="title" class="input w-full" value="{{$bookForm.Title}}">
+          <p class="label">Read from the file you upload, if you leave it empty.</p>
+        </fieldset>
+        <fieldset class="fieldset">
+          <legend class="fieldset-legend">Author <span class="opacity-50">(optional)</span></legend>
+          <input name="author" class="input w-full" value="{{$bookForm.Author}}">
+        </fieldset>
+        <button class="btn btn-primary mt-2" type="submit">Add Book</button>
+      </form>
+    </div>
+  </details>
+
+  <details class="collapse collapse-arrow bg-base-100 shadow-sm flex-1" {{if $seriesForm.Panel}}open{{end}}>
+    <summary class="collapse-title font-medium">New Series</summary>
+    <div class="collapse-content">
+      <form class="flex flex-col gap-2"
+            hx-post="/series"
+            hx-target="#app"
+            hx-swap="innerHTML">
+        {{template "form-problem" $seriesForm.Problem}}
+        <fieldset class="fieldset">
+          <legend class="fieldset-legend">Name</legend>
+          <input name="name" required class="input w-full"
+                 placeholder="The Adventures of Sherlock Holmes"
+                 value="{{$seriesForm.Name}}">
+        </fieldset>
+        <fieldset class="fieldset">
+          <legend class="fieldset-legend">Source language</legend>
+          <input name="language" required class="input w-full" value="{{$seriesForm.Language}}">
+          <p class="label">Set once here; every Book in the Series inherits it.</p>
+        </fieldset>
+        <button class="btn btn-primary mt-2" type="submit">Create Series</button>
+      </form>
+    </div>
+  </details>
+</div>
+{{end}}
+
+{{define "form-problem"}}
+{{with .}}
+<div role="alert" data-testid="form-problem" class="alert alert-warning text-left">
+  <span>{{.}}</span>
+</div>
+{{end}}
 {{end}}
 
 {{define "status-class"}}{{if eq . "Translated"}}badge-success

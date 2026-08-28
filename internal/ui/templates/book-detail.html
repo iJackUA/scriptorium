@@ -1,8 +1,8 @@
 {{define "book-detail"}}
 <div class="card bg-base-100 shadow-sm">
   <div class="card-body gap-3">
-    <h2 class="card-title">{{.Book.Title}}</h2>
-    <p class="text-sm opacity-70">{{.Book.Author}}</p>
+    <h2 class="card-title">{{.Book.Label}}</h2>
+    {{with .Book.Author}}<p class="text-sm opacity-70">{{.}}</p>{{end}}
     <dl class="text-sm grid grid-cols-[auto_1fr] gap-x-4 gap-y-1">
       <dt class="opacity-60">Book Code</dt><dd><code>{{.Book.Code}}</code></dd>
       <dt class="opacity-60">Series</dt><dd>{{.Series.Name}}</dd>

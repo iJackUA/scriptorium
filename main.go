@@ -22,7 +22,6 @@ import (
 	"sync"
 
 	"github.com/ijackua/scriptorium/internal/desktop"
-	"github.com/ijackua/scriptorium/internal/library"
 	"github.com/ijackua/scriptorium/internal/ui"
 	"github.com/ijackua/scriptorium/internal/workspace"
 	"github.com/wailsapp/wails/v2"
@@ -39,7 +38,7 @@ func main() {
 	picker := &windowPicker{}
 	session := workspace.NewSession(picker, workspace.NewSettings(settingsPath))
 
-	server, err := ui.NewServer(library.Fixture(), session)
+	server, err := ui.NewServer(session)
 	if err != nil {
 		log.Fatalf("scriptorium: %v", err)
 	}

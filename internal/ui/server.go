@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ijackua/scriptorium/internal/library"
 	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
@@ -25,8 +24,11 @@ type Server struct {
 }
 
 // NewServer binds a listener to loopback on an operating-system chosen port
-// and builds the handler tree over lib and session.
-func NewServer(lib library.Library, session *workspace.Session) (*Server, error) {
+// and builds the handler tree over session.
+//
+// The library is not passed in: it is read out of whichever workspace the
+// session has open, which is not known until the user has chosen one.
+func NewServer(session *workspace.Session) (*Server, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("bind loopback listener: %w", err)
@@ -44,7 +46,7 @@ func NewServer(lib library.Library, session *workspace.Session) (*Server, error)
 
 	s := &Server{
 		listener: listener,
-		handler:  requireLocalCaller(local, origins, routes(lib, session)),
+		handler:  requireLocalCaller(local, origins, routes(session)),
 	}
 	s.http = &http.Server{
 		Handler: s.handler,

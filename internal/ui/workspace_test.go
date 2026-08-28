@@ -18,12 +18,12 @@ func newSettings(t *testing.T) *workspace.Settings {
 	return workspace.NewSettings(filepath.Join(t.TempDir(), "settings.toml"))
 }
 
-// openSession is a session with a workspace already open, as a second launch
-// would find it.
-func openSession(t *testing.T) *workspace.Session {
+// sessionFor is a session with the workspace at root already open, as a second
+// launch would find it.
+func sessionFor(t *testing.T, root string) *workspace.Session {
 	t.Helper()
 	settings := newSettings(t)
-	if err := settings.Remember(t.TempDir()); err != nil {
+	if err := settings.Remember(root); err != nil {
 		t.Fatalf("Remember: %v", err)
 	}
 	return workspace.NewSession(&desktoptest.Picker{}, settings)
@@ -51,7 +51,7 @@ func TestWithNoWorkspaceTheRootAsksForOne(t *testing.T) {
 	if !strings.Contains(body, "Choose a workspace folder") {
 		t.Error("the root does not offer the folder picker")
 	}
-	if strings.Contains(body, "Sherlock") {
+	if strings.Contains(body, "Add a Book") {
 		t.Error("the library is on screen before a workspace has been chosen")
 	}
 	// It is a whole page rather than a fragment, because nothing is on screen
@@ -76,7 +76,7 @@ func TestChoosingAFolderSwapsInTheLibrary(t *testing.T) {
 	}
 
 	body := rec.Body.String()
-	if !strings.Contains(body, "Sherlock") {
+	if !strings.Contains(body, "empty-library") {
 		t.Error("the library did not replace the welcome screen")
 	}
 	// The response is swapped into a page that already has a layout, so it
@@ -94,7 +94,7 @@ func TestChoosingAFolderSwapsInTheLibrary(t *testing.T) {
 
 	// And a relaunch against the same settings goes straight to the library.
 	next := newTestServerFor(t, workspace.NewSession(&desktoptest.Picker{}, settings))
-	if !strings.Contains(serve(next, request(next, "/")).Body.String(), "Sherlock") {
+	if !strings.Contains(serve(next, request(next, "/")).Body.String(), "empty-library") {
 		t.Error("a second launch did not open the remembered workspace")
 	}
 }

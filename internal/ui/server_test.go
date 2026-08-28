@@ -12,16 +12,44 @@ import (
 	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
-// newTestServer serves a session that already has a workspace open, which is
-// the state every screen but the welcome one is about.
+// newTestServer serves a session that already has a workspace open with a
+// library in it, which is the state every screen but the welcome one is about.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
-	return newTestServerFor(t, openSession(t))
+	root := t.TempDir()
+	seedLibrary(t, root)
+	return newTestServerFor(t, sessionFor(t, root))
+}
+
+// seedLibrary writes a library to root through the same service layer the
+// handlers use, so the screens are driven by real files rather than by a
+// fixture that could drift from what the store actually writes.
+func seedLibrary(t *testing.T, root string) library.Store {
+	t.Helper()
+	store := library.NewStore(root)
+
+	holmes, err := store.CreateSeries("The Adventures of Sherlock Holmes", "English")
+	if err != nil {
+		t.Fatalf("CreateSeries: %v", err)
+	}
+	for _, book := range []library.BookDraft{
+		{Code: "adventures", Title: "The Adventures of Sherlock Holmes", Author: "Arthur Conan Doyle"},
+		{Code: "memoirs", Title: "The Memoirs of Sherlock Holmes", Author: "Arthur Conan Doyle"},
+		{Code: "return", Title: "The Return of Sherlock Holmes", Author: "Arthur Conan Doyle"},
+	} {
+		if _, err := store.AddBook(holmes.Code, book); err != nil {
+			t.Fatalf("AddBook %s: %v", book.Code, err)
+		}
+	}
+	if _, _, err := store.AddStandaloneBook(library.BookDraft{Code: "solaris", Title: "Solaris", Author: "Stanisław Lem"}, "Polish"); err != nil {
+		t.Fatalf("AddStandaloneBook: %v", err)
+	}
+	return store
 }
 
 func newTestServerFor(t *testing.T, session *workspace.Session) *Server {
 	t.Helper()
-	s, err := NewServer(library.Fixture(), session)
+	s, err := NewServer(session)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -116,7 +144,9 @@ func TestOwnOriginAndOriginlessRequestsAreServed(t *testing.T) {
 	}
 }
 
-func TestLibraryPageListsSeriesBooksAndStatuses(t *testing.T) {
+// The library on screen is the library on disk — every Series and Book here
+// was written by the store, not by a fixture.
+func TestLibraryPageListsWhatIsInTheWorkspace(t *testing.T) {
 	s := newTestServer(t)
 
 	rec := serve(s, request(s, "/"))
@@ -128,12 +158,17 @@ func TestLibraryPageListsSeriesBooksAndStatuses(t *testing.T) {
 	for _, want := range []string{
 		"The Adventures of Sherlock Holmes",
 		"The Memoirs of Sherlock Holmes",
+		"The Return of Sherlock Holmes",
 		"Solaris",
-		"New", "Analyzing", "Dictionary Ready", "Translating", "Translated", "Failed",
+		"Arthur Conan Doyle",
+		"adventures", "memoirs", "return",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("library page is missing %q", want)
 		}
+	}
+	if strings.Contains(body, "empty-library") {
+		t.Error("a workspace with Books in it renders as empty")
 	}
 }
 
@@ -152,18 +187,18 @@ func TestSingleBookSeriesRendersWithoutAGroupHeader(t *testing.T) {
 func TestBookDetailIsServedForHtmx(t *testing.T) {
 	s := newTestServer(t)
 
-	rec := serve(s, request(s, "/series/holmes/books/memoirs"))
+	rec := serve(s, request(s, "/series/the-adventures-of-sherlock-holmes/books/memoirs"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("got %d, want %d", rec.Code, http.StatusOK)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{"The Memoirs of Sherlock Holmes", "Ukrainian", "Dictionary Ready"} {
+	for _, want := range []string{"The Memoirs of Sherlock Holmes", "Arthur Conan Doyle", "memoirs", "English"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("book detail is missing %q", want)
 		}
 	}
 
-	missing := serve(s, request(s, "/series/holmes/books/nope"))
+	missing := serve(s, request(s, "/series/the-adventures-of-sherlock-holmes/books/nope"))
 	if missing.Code != http.StatusNotFound {
 		t.Errorf("unknown book: got %d, want %d", missing.Code, http.StatusNotFound)
 	}

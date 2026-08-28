@@ -24,14 +24,20 @@ var templates = template.Must(template.ParseFS(templateFS, "templates/*.html"))
 // routes wires the handler tree. Handlers are deliberately thin adapters over
 // the domain: the spec does not test them, which makes keeping them thin a
 // design obligation rather than a preference.
-func routes(lib library.Library, session *workspace.Session) http.Handler {
+//
+// They hang off a screens value rather than closing over the session, so that
+// "which workspace is open" is answered in one place instead of threaded
+// through every handler as an argument.
+func routes(session *workspace.Session) http.Handler {
+	s := screens{session: session}
+
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", noDirectoryListing(http.FileServerFS(staticFS)))
 
 	// The whole application is behind having a workspace, so what the root
 	// serves is whichever of the two screens the session says applies.
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		name, data := screen(lib, session)
+		name, data := s.screen(form{})
 		page(w, name, data)
 	})
 
@@ -41,35 +47,177 @@ func routes(lib library.Library, session *workspace.Session) http.Handler {
 	mux.HandleFunc("POST /workspace", func(w http.ResponseWriter, r *http.Request) {
 		// Whatever happened is already on the session, and the screen about to
 		// be rendered is the one that reports it.
-		session.Choose()
-		name, data := screen(lib, session)
-		reply(w, r, name, data)
+		s.session.Choose()
+		s.reply(w, r, form{})
 	})
 
-	mux.HandleFunc("GET /series/{series}/books/{book}", func(w http.ResponseWriter, r *http.Request) {
-		series, book, ok := lib.Book(r.PathValue("series"), r.PathValue("book"))
-		if !ok {
-			http.NotFound(w, r)
-			return
-		}
-		fragment(w, "book-detail", struct {
-			Series library.Series
-			Book   library.Book
-		}{series, book})
-	})
+	mux.HandleFunc("POST /series", s.createSeries)
+	mux.HandleFunc("POST /books", s.addBook)
+	mux.HandleFunc("GET /series/{series}/books/{book}", s.bookDetail)
 	return mux
+}
+
+// screens renders the interface over whichever workspace the session has open.
+type screens struct {
+	session *workspace.Session
+}
+
+func (s screens) createSeries(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	typed := form{Panel: seriesPanel, Name: r.FormValue("name"), Language: r.FormValue("language")}
+	if _, err := store.CreateSeries(typed.Name, typed.Language); err != nil {
+		// The screen comes back with what the user typed still in it, so a
+		// rejection is a correction rather than a retyping.
+		typed.Problem = err.Error()
+		s.reply(w, r, typed)
+		return
+	}
+	s.reply(w, r, form{})
+}
+
+// addBook serves both kinds of Book, because on disk there is only one kind: a
+// Book with no Series named gets a Series of one, and the user is never asked
+// about it.
+func (s screens) addBook(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	typed := form{
+		Panel:    bookPanel,
+		Series:   r.FormValue("series"),
+		Code:     r.FormValue("code"),
+		Title:    r.FormValue("title"),
+		Author:   r.FormValue("author"),
+		Language: r.FormValue("language"),
+	}
+	draft := library.BookDraft{Code: typed.Code, Title: typed.Title, Author: typed.Author}
+
+	var err error
+	if typed.Series == "" {
+		_, _, err = store.AddStandaloneBook(draft, typed.Language)
+	} else {
+		_, err = store.AddBook(typed.Series, draft)
+	}
+	if err != nil {
+		typed.Problem = err.Error()
+		s.reply(w, r, typed)
+		return
+	}
+	s.reply(w, r, form{})
+}
+
+func (s screens) bookDetail(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	lib, err := store.Library()
+	if err != nil {
+		s.reply(w, r, form{})
+		return
+	}
+	series, book, ok := lib.Book(r.PathValue("series"), r.PathValue("book"))
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	fragment(w, "book-detail", struct {
+		Series library.Series
+		Book   library.Book
+	}{series, book})
 }
 
 // welcome is what a user with no workspace sees, and carries whatever the
 // session has to say about why they are seeing it.
 type welcome struct{ Problem string }
 
-// screen picks the screen the session's state calls for.
-func screen(lib library.Library, session *workspace.Session) (string, any) {
-	if _, ok := session.Current(); ok {
-		return "library", lib
+// libraryScreen is everything the library page renders.
+type libraryScreen struct {
+	Library library.Library
+	Form    form
+}
+
+// The two panels the library page carries, named so that a rejection can
+// reopen the one it came from.
+const (
+	seriesPanel = "series"
+	bookPanel   = "book"
+)
+
+// form is what the user typed into one panel and what was wrong with it. It
+// exists because a rejection re-renders the whole screen — there is no
+// client-side state to preserve the fields, so the server hands them back.
+type form struct {
+	Panel    string
+	Problem  string
+	Series   string
+	Name     string
+	Code     string
+	Title    string
+	Author   string
+	Language string
+}
+
+// For is the state to render the named panel with: what the user typed, if
+// this is the panel they were typing into, and nothing if it is not.
+//
+// It exists so the template asks once per panel instead of guarding every
+// field, and so a rejection in one panel cannot leak into the other.
+func (f form) For(panel string) form {
+	if f.Panel != panel {
+		return form{}
 	}
-	return "welcome", welcome{Problem: session.Problem()}
+	return f
+}
+
+// screen picks the screen the session's state calls for.
+//
+// The library is read here rather than held, so a workspace that has gone away
+// with its drive is reported the moment the user asks for a screen instead of
+// being served from a stale copy.
+func (s screens) screen(typed form) (string, any) {
+	store, ok := s.current()
+	if !ok {
+		return "welcome", welcome{Problem: s.session.Problem()}
+	}
+	lib, err := store.Library()
+	if err != nil {
+		// There is a workspace as far as the session knows, and no library to
+		// read out of it. The picker is the only thing the user can do about
+		// that, so it is the screen they get.
+		return "welcome", welcome{Problem: err.Error()}
+	}
+	return "library", libraryScreen{Library: lib, Form: typed}
+}
+
+// current is the store for the open workspace, if one is open.
+func (s screens) current() (library.Store, bool) {
+	ws, ok := s.session.Current()
+	if !ok {
+		return library.Store{}, false
+	}
+	return library.NewStore(ws.Root), true
+}
+
+// store answers with the store for the open workspace, or renders the screen
+// that says there is not one.
+func (s screens) store(w http.ResponseWriter, r *http.Request) (library.Store, bool) {
+	store, ok := s.current()
+	if !ok {
+		s.reply(w, r, form{})
+	}
+	return store, ok
+}
+
+// reply renders the screen the session calls for, the way the request asked
+// for it.
+func (s screens) reply(w http.ResponseWriter, r *http.Request, typed form) {
+	name, data := s.screen(typed)
+	reply(w, r, name, data)
 }
 
 // Every screen is written once, as a fragment. Whether it arrives wrapped in
