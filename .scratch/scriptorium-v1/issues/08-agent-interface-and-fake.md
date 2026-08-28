@@ -8,7 +8,7 @@ It must also pass an explicit settings override. The user's global CLI configura
 
 The fake is both stub and spy — scripted responses going in, a recorded transcript of requests coming out. It is the suite's single substitution seam, and that dual role is what keeps the seam count at one: chunking, continuity, and Dictionary injection are invisible in the output file but plainly visible in the recorded requests.
 
-In v1 the Agent field has exactly one legal value. The field exists so the file format stays stable when a second Agent is added.
+The Agent field names which Agent to drive. `claude` is the first and `codex` follows shortly, so the field takes a known set of values and rejects anything outside it. Building the second adapter is also the test of this interface: if the seam is as narrow as ADR-0001 claims, `codex` fits behind it unchanged.
 
 **Blocked by:** None — can start immediately.
 

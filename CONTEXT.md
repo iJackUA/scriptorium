@@ -77,5 +77,5 @@ The external command-line AI tool invoked as a subprocess to perform translation
 _Avoid_: API, backend, provider, LLM
 
 **Model**:
-The specific model an Agent is asked to use for one kind of task. Chosen separately for mechanical work and for translation.
+The specific model an Agent is asked to use for one kind of task, named in that Agent's own vocabulary. A Model is meaningful only paired with the Agent that accepts it; there is no namespace shared across Agents. Chosen separately for mechanical work and for translation.
 _Avoid_: engine, AI
