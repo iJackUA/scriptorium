@@ -9,11 +9,19 @@ import (
 	"testing"
 
 	"github.com/ijackua/scriptorium/internal/library"
+	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
+// newTestServer serves a session that already has a workspace open, which is
+// the state every screen but the welcome one is about.
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
-	s, err := NewServer(library.Fixture())
+	return newTestServerFor(t, openSession(t))
+}
+
+func newTestServerFor(t *testing.T, session *workspace.Session) *Server {
+	t.Helper()
+	s, err := NewServer(library.Fixture(), session)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}

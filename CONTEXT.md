@@ -6,6 +6,10 @@ A desktop application for translating ebooks with an AI agent, one book at a tim
 
 ### Library structure
 
+**Workspace**:
+The single folder, chosen by the user on first launch, holding the whole library as plain files. Its root carries a `workspace.toml` of defaults that everything beneath it inherits.
+_Avoid_: library folder, vault, database, storage, project folder
+
 **Series**:
 A named group of Books that share a source language, a Dictionary, and translation settings. Every Book belongs to exactly one Series; a standalone book is a Series containing one Book.
 _Avoid_: collection, group, project, folder

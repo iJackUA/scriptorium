@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ijackua/scriptorium/internal/library"
+	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
 // Server is the embedded HTTP server together with the loopback listener it
@@ -24,8 +25,8 @@ type Server struct {
 }
 
 // NewServer binds a listener to loopback on an operating-system chosen port
-// and builds the handler tree over lib.
-func NewServer(lib library.Library) (*Server, error) {
+// and builds the handler tree over lib and session.
+func NewServer(lib library.Library, session *workspace.Session) (*Server, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("bind loopback listener: %w", err)
@@ -43,7 +44,7 @@ func NewServer(lib library.Library) (*Server, error) {
 
 	s := &Server{
 		listener: listener,
-		handler:  requireLocalCaller(local, origins, routes(lib)),
+		handler:  requireLocalCaller(local, origins, routes(lib, session)),
 	}
 	s.http = &http.Server{
 		Handler: s.handler,
