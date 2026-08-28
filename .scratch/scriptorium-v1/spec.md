@@ -102,7 +102,7 @@ Translation runs Chunk by Chunk, each Chunk seeing the previous one's translatio
 
 ### Domain and vocabulary
 
-All terms carry the meanings defined in `CONTEXT.md`. In particular: **Status and progress belong to a Translation Target**, not to a Book, because one Book may be translated into several languages at different times. Every Book belongs to exactly one Series; a standalone Book is a Series of one, and "hidden" is a rendering choice only — there is no second concept in the model.
+All terms carry the meanings defined in `CONTEXT.md`. In particular: **Status and progress belong to a Translation Target**, not to a Book, because one Book may be translated into several languages at different times. Every Book belongs to exactly one Series; a standalone Book is a Series of one, and "hidden" is a rendering choice only — there is no second concept in the model. A Series owns one immutable Source Language; every Book in it inherits that language.
 
 ### Architectural constraints already decided
 
@@ -118,15 +118,16 @@ State lives in plain files under a single workspace root chosen on first launch.
 
 ```
 <workspace>/
-  workspace.toml                      default Agent and Model, language list
+  workspace.toml                      default Agent and Model, target-language allowlist
   <series-code>/
-    series.toml                       name, source language, defaults
+    series.toml                       name, immutable source-language tag, defaults
     prompt.md                         optional prompt override
-    dictionaries/<pair>.tsv           Series Dictionary, per language pair
+    dictionaries/<source>-to-<target>.tsv
+                                      Series Dictionary, per Language Pair
     books/<book-code>/
       book.toml                       metadata, Agent and Model override
       source.<ext>                    Source File, never modified
-      translations/<pair>/
+      translations/<source>-to-<target>/
         dictionary.tsv                Book Dictionary
         state.json                    progress, resumable
         out/<book-code>.<target>.<ext>
@@ -134,7 +135,15 @@ State lives in plain files under a single workspace root chosen on first launch.
 
 Two format families, chosen deliberately: **TOML** for anything a human edits, because comments survive; **JSON** for machine-written progress, which is rewritten constantly and not meant for human eyes. Dictionaries are **TSV** (`original`, `translation`, `note`) because they are hand-edited *and* machine-generated, and a line-oriented format is far more robust to model output than YAML's indentation rules.
 
-`state.json` is the only file that must be crash-safe: write to a temporary file and rename, so an interrupted write can never leave a book unresumable.
+`state.json` is the only file that must be crash-safe: write to a temporary file and rename, so an interrupted write can never leave a book unresumable. A newly created Translation Target starts with the machine-readable value `{ "status": "new" }`; UI labels map machine values to the canonical Status names.
+
+### Language model
+
+The application ships a fixed catalog of ISO 639-1 base languages. Language Tags are canonical lowercase codes, such as `en`, `uk`, and `de`; files store those tags, while the UI and Agent prompts show both the English language name and tag, for example `Ukrainian (uk)`. There are no custom languages or free-text language fields in v1.
+
+`workspace.toml` stores an ordered, initially empty allowlist of Target Language Tags. Workspace settings add languages from the full catalog and remove them individually. Removing a language already used by a Translation Target preserves that target and its data, but prevents new targets in that language. Changes made through settings apply immediately; a manual edit to `workspace.toml` is read on the next workspace open. A legacy workspace with name-based language values is rejected without rewriting or migration.
+
+A Source Language is selected from the full catalog when a Series is created, including when a standalone Book creates its Series. It is stored once in `series.toml`, is immutable, and is never requested while adding a Book to an existing Series. The current Source Language cannot be chosen as a Translation Target.
 
 ### Agent invocation
 
@@ -190,11 +199,11 @@ The full Dictionary is injected into every translation request without filtering
 
 ### Prompts
 
-The translation prompt is a template with documented slots for source and target language, the Dictionary, the Continuity Window, and the numbered-node instructions. A built-in default ships with the app; an optional per-Series override replaces it. Overrides are **validated on load** — a template missing a required slot fails loudly, because the alternative is silently translating a book without its Dictionary.
+The translation prompt is a template with documented slots for source and target language, the Dictionary, the Continuity Window, and the numbered-node instructions. Source and target language slots receive both the human-readable language name and canonical Language Tag. A built-in default ships with the app; an optional per-Series override replaces it. Overrides are **validated on load** — a template missing a required slot fails loudly, because the alternative is silently translating a book without its Dictionary.
 
 ### UI
 
-Wails v2 wrapping an embedded Go HTTP server serving `html/template` plus htmx, with Tailwind and daisyUI for components. Server-sent events carry progress for Dictionary Building and translation — this is the reason for choosing an embedded server over native bindings, since the application is fundamentally a progress dashboard over long-running jobs.
+Wails v2 wrapping an embedded Go HTTP server serving `html/template` plus htmx, with Tailwind and daisyUI for components. Tom Select is bundled locally and used with `create: false` for searchable, keyboard-accessible Language pickers; DaisyUI styles the surrounding forms and destructive confirmation modal. Server-sent events carry progress for Dictionary Building and translation — this is the reason for choosing an embedded server over native bindings, since the application is fundamentally a progress dashboard over long-running jobs.
 
 The server binds to loopback on a random port and checks request origin. Handlers stay thin adapters over the service layer.
 

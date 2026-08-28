@@ -72,11 +72,11 @@ modelling fields nothing reads yet — 17 owns those, and decoding them now woul
 be a promise this ticket does not keep. Titles are quoted through `tomlString`,
 so an apostrophe or a backslash in a book title cannot break the file.
 
-**Source language is typed, with nothing suggested.** `workspace.toml` lists
-the languages to translate *into*, and offering those as source languages would
-suggest Ukrainian as the source for an English book. A source-language list is
-not this ticket's to invent, so the field is a plain input; 04 is what reads the
-target languages, for the field they belong to.
+**Superseded language-input decision.** Issue 04 replaces the plain source
+language input with a constrained full-catalog picker. The Series stores one
+immutable canonical Source Language tag; Books added to it inherit that tag and
+never submit their own language. The Workspace target-language allowlist remains
+distinct from the full source-language catalog.
 
 **Forms hand back what the user typed.** Both panels post the whole library
 screen back to `#app`, so a rejection arrives with the fields still filled in

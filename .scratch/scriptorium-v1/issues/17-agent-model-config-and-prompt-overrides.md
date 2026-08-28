@@ -18,6 +18,7 @@ Model names belong to an Agent's own vocabulary, so the pair of Models is held *
 - [ ] A Book that overrides the Agent without overriding the Models is rejected on load, naming the Agent and the Model that don't belong together
 - [ ] Mechanical work uses the cheap Model and translation uses the strong one, asserted against the recorded requests
 - [ ] A `<series-code>/prompt.md` override replaces the built-in prompt rather than appending to it
+- [ ] Source and target language prompt slots receive both the English language name and canonical Language Tag
 - [ ] An override missing a required slot fails loudly on load, before any request is made
 - [ ] The error names which slot is missing
 - [ ] With no override present, the built-in default is used and nothing warns

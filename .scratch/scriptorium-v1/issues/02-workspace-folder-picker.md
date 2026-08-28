@@ -42,6 +42,11 @@ writes a default file (comments and all) when the folder has none, and
 otherwise only reads. There is deliberately no `Save` to reach for; a test
 asserts the file is byte-for-byte unchanged after opening.
 
+**Superseded language-settings decision.** Issue 04 now owns a narrowly scoped
+writer for the ordered target-language allowlist. It must preserve comments and
+unrelated configuration while applying an in-app settings change; opening a
+Workspace still never rewrites `workspace.toml`.
+
 **Two files, two homes.** `workspace.toml` holds what a workspace is;
 `~/Library/Application Support/Scriptorium/settings.toml` holds which workspace
 to open, because that one cannot live inside a workspace. A settings file that

@@ -7,11 +7,11 @@ A desktop application for translating ebooks with an AI agent, one book at a tim
 ### Library structure
 
 **Workspace**:
-The single folder, chosen by the user on first launch, holding the whole library as plain files. Its root carries a `workspace.toml` of defaults that everything beneath it inherits.
+The single folder, chosen by the user on first launch, holding the whole library as plain files. Its root carries a `workspace.toml` of defaults and the Translation Target languages available throughout the Workspace.
 _Avoid_: library folder, vault, database, storage, project folder
 
 **Series**:
-A named group of Books that share a source language, a Dictionary, and translation settings. Every Book belongs to exactly one Series; a standalone book is a Series containing one Book.
+A named group of Books with one immutable Source Language, a Dictionary, and translation settings. Every Book belongs to exactly one Series; a standalone book is a Series containing one Book.
 _Avoid_: collection, group, project, folder
 
 **Book**:
@@ -23,12 +23,28 @@ A short identifier assigned by hand, unique within its Series, that names the Bo
 _Avoid_: slug, id, shortname, key
 
 **Translation Target**:
-The pairing of a Book with one target language. Progress, Dictionary, Status, and output all belong to a Translation Target rather than to the Book, so one Book can be translated into several languages independently.
+The pairing of a Book with one enabled Target Language distinct from its Series' Source Language. Progress, Dictionary, Status, and output all belong to a Translation Target rather than to the Book, so one Book can be translated into several languages independently.
 _Avoid_: job, run, output, task
 
 **Status**:
 The stage a Translation Target has reached: `New`, `Analyzing`, `Dictionary Ready`, `Translating`, `Translated`, or `Failed`.
 _Avoid_: state, phase, progress
+
+**Language Tag**:
+The canonical ISO 639-1 identifier for a Language, such as `en`, `uk`, or `de`. It is stored wherever a Source Language or Target Language is recorded; people see its human-readable Language name alongside it.
+_Avoid_: free-text language, locale
+
+**Source Language**:
+The immutable Language Tag chosen when a Series is created. Every Book in that Series uses it as its original language.
+_Avoid_: book language, input language
+
+**Target Language**:
+A Language Tag enabled in the Workspace for creating Translation Targets. It must differ from the Series' Source Language.
+_Avoid_: output language, destination locale
+
+**Language Pair**:
+The ordered Source Language and Target Language of a Translation Target, such as `en` to `uk`.
+_Avoid_: locale pair
 
 ### Source material
 
