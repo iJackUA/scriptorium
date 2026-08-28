@@ -12,11 +12,17 @@ Today that means `cmd/headless` is a handful of lines over `ui.NewServer(library
 
 **Status:** ready-for-agent
 
-- [ ] `cmd/headless` serves the same handler tree the window serves, with the Host and Origin checks active and unchanged
-- [ ] Its first line of output is the URL, in a form a script can read without parsing prose
-- [ ] It serves until interrupted, and exits cleanly on SIGINT
-- [ ] `make headless` launches it, is listed by `make help`, and is the only place launch instructions live
-- [ ] The root `main.go` imports nothing from `cmd/headless`, gains no flags, and is otherwise untouched
-- [ ] `make check` passes and the Wails production build is unchanged in behaviour
+- [x] `cmd/headless` serves the same handler tree the window serves, with the Host and Origin checks active and unchanged
+- [x] Its first line of output is the URL, in a form a script can read without parsing prose
+- [x] It serves until interrupted, and exits cleanly on SIGINT
+- [x] `make headless` launches it, is listed by `make help`, and is the only place launch instructions live
+- [x] The root `main.go` imports nothing from `cmd/headless`, gains no flags, and is otherwise untouched
+- [x] `make check` passes and the Wails production build is unchanged in behaviour
 
 ## Comments
+
+Implemented with an isolated `cmd/headless` entrypoint. It creates an ephemeral
+fixture Workspace for every session, and its picker always declines so a browser
+can never open the native folder chooser. The first line from `make headless`
+was the bare loopback URL. Verified the page and its Host/Origin middleware
+through the unchanged `ui.NewServer` handler tree.

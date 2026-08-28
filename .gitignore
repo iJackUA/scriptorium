@@ -3,3 +3,4 @@ node_modules/
 build/bin/
 frontend/wailsjs/
 frontend/package.json.md5
+.verification/

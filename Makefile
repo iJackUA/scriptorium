@@ -65,6 +65,10 @@ build: require-wails
 run: build
 	open $(APP)
 
+## headless: serve the interface over loopback for manual verification
+headless:
+	@go run ./cmd/headless
+
 # --- assets --------------------------------------------------------------
 
 # The output is committed, so go build and go test work without npm installed.
@@ -106,4 +110,4 @@ fmt-check:
 clean:
 	rm -rf build/bin
 
-.PHONY: help setup tools require-wails deps doctor dev build run assets check test vet fmt fmt-check clean
+.PHONY: help setup tools require-wails deps doctor dev build run headless assets check test vet fmt fmt-check clean

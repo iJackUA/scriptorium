@@ -61,3 +61,9 @@ templates render into a buffer so a mid-execution failure is a 500 rather than a
 The window was not confirmed visually — this shell lacks assistive access and
 `screencapture` only reaches the frontmost Space, so the window never landed in a
 screenshot. Worth an eyeball.
+
+**Verification follow-up (agent-verification 02):** `make headless` served the
+same library handler tree over loopback. An `agent-browser` snapshot found the
+library Book button; clicking it swapped the `book-detail` region to the Book's
+details and Translation Targets. Screenshot:
+`.verification/library-book-detail.png` (ignored by git).
