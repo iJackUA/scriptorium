@@ -9,24 +9,24 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/ijackua/scriptorium/internal/format"
 )
 
-// TextNode is one addressable piece of prose in an FB2 document. Index is the
-// stable position used to put a translated node back in its original place;
-// Chapter identifies the section that bounds chunking.
-type TextNode struct {
-	Index   int
-	Text    string
-	Chapter int
-}
+// TextNode and Chapter are aliases so every format handler shares the same
+// pipeline data model.
+type TextNode = format.TextNode
+type Chapter = format.Chapter
 
-// Chapter is one FB2 section, in document order. Nodes contains the indices of
-// the Text Nodes directly belonging to this section.
-type Chapter struct {
-	Index  int
-	Parent int
-	Title  string
-	Nodes  []int
+// Handler adapts the FB2 parser to the format-neutral handler boundary.
+type Handler struct{}
+
+var _ format.Handler = Handler{}
+var _ format.Document = Document{}
+
+// Parse implements format.Handler.
+func (Handler) Parse(source []byte) (format.Document, error) {
+	return Parse(source)
 }
 
 // Document is a parsed FB2 document and the structure required to splice
@@ -254,6 +254,12 @@ func (d Document) Splice(translations []TextNode) ([]byte, error) {
 	output.Write(d.source[cursor:])
 	return output.Bytes(), nil
 }
+
+// TextNodes implements format.Document.
+func (d Document) TextNodes() []TextNode { return d.Nodes }
+
+// ChaptersList implements format.Document.
+func (d Document) ChaptersList() []Chapter { return d.Chapters }
 
 func escapeText(text string) ([]byte, error) {
 	var escaped bytes.Buffer
