@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ijackua/scriptorium/internal/library"
+	"github.com/ijackua/scriptorium/internal/translation"
 	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
@@ -284,6 +286,24 @@ func TestNewTranslationTargetWithASourceFileOffersDictionaryBuilding(t *testing.
 	body := serve(s, request(s, "/series/solaris/books/solaris")).Body.String()
 	if !strings.Contains(body, "Start Dictionary Building") {
 		t.Errorf("new Target with a Source File does not offer Dictionary Building:\n%s", body)
+	}
+}
+
+func TestDictionaryBuildingShowsTheActiveChunkAndRefreshesIt(t *testing.T) {
+	body, err := execute("book-detail", bookDetailData{
+		Series: library.Series{Code: "holmes", Name: "Holmes", SourceLanguage: "en"},
+		Book:   library.Book{Code: "adventures", Targets: []library.TranslationTarget{{Language: "uk", Status: library.StatusAnalyzing}}},
+		Progress: map[string]translation.DictionaryProgress{
+			"uk": {Completed: 3, Active: 4, Total: 20},
+		},
+	})
+	if err != nil {
+		t.Fatalf("render Dictionary progress: %v", err)
+	}
+	for _, want := range []string{"Analyzing Chunk 4/20 (3 complete)", `hx-trigger="load delay:1s, every 1s"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Dictionary progress does not render %q:\n%s", want, body)
+		}
 	}
 }
 

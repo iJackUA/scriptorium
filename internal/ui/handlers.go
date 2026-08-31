@@ -302,7 +302,7 @@ func (s screens) startDictionaryBuilding(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	key := dictionaryKey(seriesCode, bookCode, targetLanguage)
-	s.dictionaryRuns.set(key, translation.DictionaryProgress{Total: len(translation.ChunkNodes(document.TextNodes(), 0))})
+	s.dictionaryRuns.set(key, translation.DictionaryProgress{Active: 1, Total: len(translation.ChunkNodes(document.TextNodes(), 0))})
 	ws, _ := s.session.Current()
 	go s.buildDictionary(context.Background(), store, ws.Root, ws.Config, series, book, targetLanguage, key)
 	s.bookDetail(w, r)

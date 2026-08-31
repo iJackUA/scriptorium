@@ -38,6 +38,7 @@ func TestClaudeUsesPlainModelInvocationAndReadsJSONResponse(t *testing.T) {
 	assertArgValue(t, args, "--disallowed-tools", "mcp__*")
 	assertArgValue(t, args, "--output-format", "json")
 	assertArgValue(t, args, "--model", request.Model)
+	assertArgValue(t, args, "--effort", "medium")
 
 	settings := argValue(t, args, "--settings")
 	var settingsJSON map[string]string

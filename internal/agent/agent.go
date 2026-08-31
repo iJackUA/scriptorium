@@ -19,12 +19,21 @@ import (
 // every call site.
 type Model = string
 
+// Effort controls how much reasoning an Agent spends on one request.
+type Effort string
+
+const (
+	EffortLow    Effort = "low"
+	EffortMedium Effort = "medium"
+)
+
 // Request is one plain language-model request. The adapter owns how its CLI
 // represents the system prompt and other invocation options; callers only
 // provide the prompt and the model to use.
 type Request struct {
 	Prompt string
 	Model  Model
+	Effort Effort
 }
 
 // Response is the useful part of a CLI response.
@@ -134,6 +143,7 @@ func (c *Claude) Call(ctx context.Context, request Request) (Response, error) {
 		"--disallowed-tools", "mcp__*",
 		"--output-format", "json",
 		"--model", request.Model,
+		"--effort", string(effortFor(request.Effort)),
 		// Claude's user/project configuration can silently override --model.
 		// An inline settings object is therefore part of every invocation.
 		"--settings", settings,
@@ -178,6 +188,13 @@ func (c *Claude) Call(ctx context.Context, request Request) (Response, error) {
 		return Response{}, err
 	}
 	return response, nil
+}
+
+func effortFor(effort Effort) Effort {
+	if effort == "" {
+		return EffortMedium
+	}
+	return effort
 }
 
 func (c *Claude) record(event Event) error {

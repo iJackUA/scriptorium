@@ -23,6 +23,7 @@ type Term = library.Term
 // DictionaryProgress says how many extraction Chunks have completed.
 type DictionaryProgress struct {
 	Completed int
+	Active    int
 	Total     int
 }
 
@@ -51,7 +52,10 @@ func (b DictionaryBuilder) Build(ctx context.Context, nodes []format.TextNode, s
 	chunks := ChunkNodes(nodes, b.ChunkWordBudget)
 	counts := make(map[string]int)
 	for index, chunk := range chunks {
-		response, err := b.Agent.Call(ctx, agent.Request{Model: b.MechanicalModel, Prompt: extractionPrompt(chunk)})
+		if report != nil {
+			report(DictionaryProgress{Completed: index, Active: index + 1, Total: len(chunks)})
+		}
+		response, err := b.Agent.Call(ctx, agent.Request{Model: b.MechanicalModel, Effort: agent.EffortLow, Prompt: extractionPrompt(chunk)})
 		if err != nil {
 			return nil, fmt.Errorf("extract Terms from Chunk %d: %w", chunk.Index+1, err)
 		}
@@ -59,7 +63,7 @@ func (b DictionaryBuilder) Build(ctx context.Context, nodes []format.TextNode, s
 			counts[term]++
 		}
 		if report != nil {
-			report(DictionaryProgress{Completed: index + 1, Total: len(chunks)})
+			report(DictionaryProgress{Completed: index + 1, Active: index + 1, Total: len(chunks)})
 		}
 	}
 
@@ -75,6 +79,7 @@ func (b DictionaryBuilder) Build(ctx context.Context, nodes []format.TextNode, s
 	}
 	response, err := b.Agent.Call(ctx, agent.Request{
 		Model:  b.MechanicalModel,
+		Effort: agent.EffortLow,
 		Prompt: termTranslationPrompt(surviving, sourceLanguage, targetLanguage),
 	})
 	if err != nil {
