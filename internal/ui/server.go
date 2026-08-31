@@ -47,7 +47,7 @@ func NewServer(session *workspace.Session) (*Server, error) {
 
 	s := &Server{
 		listener: listener,
-		handler:  requireLocalCaller(local, origins, routes(session, agent.New)),
+		handler:  requireLocalCaller(local, origins, routes(session, agent.NewWithLogger)),
 	}
 	s.http = &http.Server{
 		Handler: s.handler,

@@ -52,7 +52,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 // They hang off a screens value rather than closing over the session, so that
 // "which workspace is open" is answered in one place instead of threaded
 // through every handler as an argument.
-func routes(session *workspace.Session, agents func(string) (agent.Agent, error)) http.Handler {
+func routes(session *workspace.Session, agents func(string, agent.Logger) (agent.Agent, error)) http.Handler {
 	s := screens{session: session, agents: agents, dictionaryRuns: newDictionaryRuns()}
 
 	mux := http.NewServeMux()
@@ -90,7 +90,7 @@ func routes(session *workspace.Session, agents func(string) (agent.Agent, error)
 // screens renders the interface over whichever workspace the session has open.
 type screens struct {
 	session        *workspace.Session
-	agents         func(string) (agent.Agent, error)
+	agents         func(string, agent.Logger) (agent.Agent, error)
 	dictionaryRuns *dictionaryRuns
 }
 
@@ -304,11 +304,11 @@ func (s screens) startDictionaryBuilding(w http.ResponseWriter, r *http.Request)
 	key := dictionaryKey(seriesCode, bookCode, targetLanguage)
 	s.dictionaryRuns.set(key, translation.DictionaryProgress{Total: len(translation.ChunkNodes(document.TextNodes(), 0))})
 	ws, _ := s.session.Current()
-	go s.buildDictionary(context.Background(), store, ws.Config, series, book, targetLanguage, key)
+	go s.buildDictionary(context.Background(), store, ws.Root, ws.Config, series, book, targetLanguage, key)
 	s.bookDetail(w, r)
 }
 
-func (s screens) buildDictionary(ctx context.Context, store library.Store, config workspace.Config, series library.Series, book library.Book, targetLanguage, key string) {
+func (s screens) buildDictionary(ctx context.Context, store library.Store, workspaceRoot string, config workspace.Config, series library.Series, book library.Book, targetLanguage, key string) {
 	defer s.dictionaryRuns.clear(key)
 	fail := func(err error) {
 		log.Printf("Dictionary Building for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
@@ -326,7 +326,12 @@ func (s screens) buildDictionary(ctx context.Context, store library.Store, confi
 		fail(err)
 		return
 	}
-	client, err := s.agents(config.Agent)
+	transcript, err := agent.NewFileLogger(filepath.Join(workspaceRoot, "logs", "agent-transcript.jsonl"))
+	if err != nil {
+		fail(err)
+		return
+	}
+	client, err := s.agents(config.Agent, transcript)
 	if err != nil {
 		fail(err)
 		return

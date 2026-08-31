@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Model is the name of a model understood by an Agent.
@@ -72,10 +73,16 @@ func ValidateName(name string) error {
 
 // New constructs the adapter named in configuration.
 func New(name string) (Agent, error) {
+	return NewWithLogger(name, nil)
+}
+
+// NewWithLogger constructs an adapter which records every Agent invocation
+// when logger is non-nil.
+func NewWithLogger(name string, logger Logger) (Agent, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, err
 	}
-	return NewClaude(), nil
+	return NewClaudeWithLogger(logger), nil
 }
 
 // Claude drives the claude CLI as a single non-interactive plain-model call.
@@ -85,12 +92,17 @@ func New(name string) (Agent, error) {
 type Claude struct {
 	Command      string
 	SystemPrompt string
+	Logger       Logger
 }
 
 var _ Agent = (*Claude)(nil)
 
 // NewClaude returns the production Claude adapter.
 func NewClaude() *Claude { return &Claude{} }
+
+// NewClaudeWithLogger returns the production adapter with an optional full
+// request/reply transcript.
+func NewClaudeWithLogger(logger Logger) *Claude { return &Claude{Logger: logger} }
 
 // Call invokes claude without a tool loop or conversational session and
 // decodes its JSON result.
@@ -127,24 +139,53 @@ func (c *Claude) Call(ctx context.Context, request Request) (Response, error) {
 		"--settings", settings,
 		request.Prompt,
 	}
+	started := time.Now()
+	if err := c.record(Event{At: started, Phase: "invoked", Command: command, Arguments: args, Model: request.Model, Prompt: request.Prompt}); err != nil {
+		return Response{}, err
+	}
 	cmd := exec.CommandContext(ctx, command, args...)
 	output, err := cmd.Output()
 	if err != nil {
+		callErr := fmt.Errorf("%w: run claude: %v", ErrCall, err)
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			message := strings.TrimSpace(string(exitErr.Stderr))
 			if message != "" {
-				return Response{}, fmt.Errorf("%w: claude exited unsuccessfully: %s", ErrCall, message)
+				callErr = fmt.Errorf("%w: claude exited unsuccessfully: %s", ErrCall, message)
 			}
 		}
-		return Response{}, fmt.Errorf("%w: run claude: %v", ErrCall, err)
+		if recordErr := c.record(Event{At: time.Now(), Phase: "returned", Command: command, Model: request.Model, Prompt: request.Prompt, Error: callErr.Error(), DurationMS: time.Since(started).Milliseconds()}); recordErr != nil {
+			return Response{}, recordErr
+		}
+		return Response{}, callErr
 	}
 
 	var response Response
 	if err := unmarshalResponse(output, &response); err != nil {
-		return Response{}, fmt.Errorf("%w: decode claude response: %v", ErrCall, err)
+		callErr := fmt.Errorf("%w: decode claude response: %v", ErrCall, err)
+		if recordErr := c.record(Event{At: time.Now(), Phase: "returned", Command: command, Model: request.Model, Prompt: request.Prompt, RawReply: string(output), Error: callErr.Error(), DurationMS: time.Since(started).Milliseconds()}); recordErr != nil {
+			return Response{}, recordErr
+		}
+		return Response{}, callErr
 	}
 	if response.IsError {
-		return response, fmt.Errorf("%w: claude reported an error", ErrCall)
+		callErr := fmt.Errorf("%w: claude reported an error", ErrCall)
+		if recordErr := c.record(Event{At: time.Now(), Phase: "returned", Command: command, Model: request.Model, Prompt: request.Prompt, RawReply: string(output), Reply: response.Result, Error: callErr.Error(), DurationMS: time.Since(started).Milliseconds(), Cost: response.Cost}); recordErr != nil {
+			return Response{}, recordErr
+		}
+		return response, callErr
+	}
+	if err := c.record(Event{At: time.Now(), Phase: "returned", Command: command, Model: request.Model, Prompt: request.Prompt, RawReply: string(output), Reply: response.Result, DurationMS: time.Since(started).Milliseconds(), Cost: response.Cost}); err != nil {
+		return Response{}, err
 	}
 	return response, nil
+}
+
+func (c *Claude) record(event Event) error {
+	if c.Logger == nil {
+		return nil
+	}
+	if err := c.Logger.Record(event); err != nil {
+		return fmt.Errorf("%w: record Agent transcript: %v", ErrCall, err)
+	}
+	return nil
 }
