@@ -8,11 +8,25 @@ The Agent is never shown markup. This boundary is what makes epub and docx cheap
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** claimed
 
-- [ ] Parsing yields an ordered list of Text Nodes and a Chapter structure taken from the fb2's own sections
-- [ ] Splicing an identity translation back reproduces a file equivalent to the input
-- [ ] The round-trip property runs over a corpus of real fb2 files, including the one in `test_data/`
-- [ ] The corpus includes awkward cases: nested markup, footnotes, empty paragraphs, poetry blocks
-- [ ] Splicing is by position into the original document tree; the document is never taken apart and rejoined
-- [ ] The handler is a pure function tested directly, with no substitution seam
+- [x] Parsing yields an ordered list of Text Nodes and a Chapter structure taken from the fb2's own sections
+- [x] Splicing an identity translation back reproduces a file equivalent to the input
+- [x] The round-trip property runs over a corpus of real fb2 files, including the one in `test_data/`
+- [x] The corpus includes awkward cases: nested markup, footnotes, empty paragraphs, poetry blocks
+- [x] Splicing is by position into the original document tree; the document is never taken apart and rejoined
+- [x] The handler is a pure function tested directly, with no substitution seam
+
+## Comments
+
+### Implementation — 2026-08-31
+
+Added the pure `internal/format/fb2` handler. It extracts ordered paragraph and
+poetry-line Text Nodes, records every FB2 section as a Chapter with its parent,
+and splices translated text into the original byte tree while retaining
+markup, attributes, namespaces, comments, and formatting. Splicing validates
+node count and indices before changing anything.
+
+The direct test corpus covers the committed Sherlock Holmes FB2 plus a compact
+fixture with nested markup, a footnote body, an empty paragraph, poetry, and
+nested sections. `make check` passes.
