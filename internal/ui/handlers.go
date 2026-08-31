@@ -70,6 +70,7 @@ func routes(session *workspace.Session) http.Handler {
 	mux.HandleFunc("POST /books", s.addBook)
 	mux.HandleFunc("POST /settings/target-languages", s.setTargetLanguages)
 	mux.HandleFunc("GET /series/{series}/books/{book}", s.bookDetail)
+	mux.HandleFunc("POST /series/{series}/books/{book}/source", s.uploadSourceFile)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets", s.createTarget)
 	mux.HandleFunc("DELETE /series/{series}/books/{book}/targets/{target}", s.deleteTarget)
 	return mux
@@ -161,6 +162,25 @@ func (s screens) bookDetail(w http.ResponseWriter, r *http.Request) {
 		Allowed []targetOption
 		Problem string
 	}{series, book, allowed, ""})
+}
+
+func (s screens) uploadSourceFile(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	file, header, err := r.FormFile("source")
+	if err != nil {
+		s.detail(w, r, "choose a .txt or .fb2 Source File to upload")
+		return
+	}
+	defer file.Close()
+	confirmed := r.FormValue("confirmed") == "true"
+	if err := store.UploadSourceFile(r.PathValue("series"), r.PathValue("book"), header.Filename, file, confirmed); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	s.bookDetail(w, r)
 }
 
 type targetOption struct {

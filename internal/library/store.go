@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,6 +28,8 @@ const (
 	TranslationsDir = "translations"
 	// StateFile holds a Translation Target's machine Status.
 	StateFile = "state.json"
+	// SourceFilePrefix is the filename before a Source File's extension.
+	SourceFilePrefix = "source"
 )
 
 var (
@@ -35,6 +38,9 @@ var (
 	// ErrSeriesNotFound reports a Series that is not in the workspace.
 	ErrSeriesNotFound          = errors.New("that Series is not in this workspace")
 	ErrTranslationTargetExists = errors.New("that Translation Target already exists")
+	// ErrSourceReplacementNeedsConfirmation prevents a stray upload from
+	// discarding the Translation Targets that belong to the old Source File.
+	ErrSourceReplacementNeedsConfirmation = errors.New("replacing the Source File discards all existing translation work for this Book; confirm the replacement to continue")
 )
 
 // Store reads and writes the Series and Books of a Library as plain files
@@ -163,7 +169,11 @@ func (s Store) books(seriesCode, sourceLanguage string) ([]Book, error) {
 		if err != nil {
 			return nil, err
 		}
-		books = append(books, Book{Code: entry.Name(), Title: file.Title, Author: file.Author, Targets: targets})
+		source, err := sourceFile(filepath.Join(s.root, seriesCode, BooksDir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("read Book %s: %w", entry.Name(), err)
+		}
+		books = append(books, Book{Code: entry.Name(), Title: file.Title, Author: file.Author, SourceFile: source, Targets: targets})
 	}
 	slices.SortFunc(books, func(a, b Book) int { return strings.Compare(a.Code, b.Code) })
 	return books, nil
@@ -294,6 +304,82 @@ func (s Store) CreateTranslationTarget(seriesCode, bookCode, targetLanguage stri
 		return TranslationTarget{}, fmt.Errorf("create Translation Target: %w", err)
 	}
 	return TranslationTarget{Language: targetLanguage, Status: StatusNew}, nil
+}
+
+// UploadSourceFile stores a Book's supplied Source File without interpreting
+// or changing its bytes. Replacing one requires explicit confirmation because
+// every Translation Target was made from the old Source File.
+func (s Store) UploadSourceFile(seriesCode, bookCode, filename string, source io.Reader, confirmed bool) error {
+	if _, _, ok := s.book(seriesCode, bookCode); !ok {
+		return fmt.Errorf("Book %q is not in Series %q", bookCode, seriesCode)
+	}
+	extension := strings.ToLower(filepath.Ext(strings.TrimSpace(filename)))
+	if extension != ".txt" && extension != ".fb2" {
+		return errors.New("a Source File must be a .txt or .fb2 file")
+	}
+
+	bookDir := filepath.Join(s.root, seriesCode, BooksDir, bookCode)
+	existing, err := sourceFile(bookDir)
+	if err != nil {
+		return err
+	}
+	if existing != "" && !confirmed {
+		return ErrSourceReplacementNeedsConfirmation
+	}
+
+	temporary, err := os.CreateTemp(bookDir, ".source-*")
+	if err != nil {
+		return fmt.Errorf("prepare Source File: %w", err)
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if _, err := io.Copy(temporary, source); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("store Source File: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("store Source File: %w", err)
+	}
+
+	if existing != "" {
+		if err := os.RemoveAll(filepath.Join(bookDir, TranslationsDir)); err != nil {
+			return fmt.Errorf("discard translation work: %w", err)
+		}
+		if existing != SourceFilePrefix+extension {
+			if err := os.Remove(filepath.Join(bookDir, existing)); err != nil {
+				return fmt.Errorf("replace Source File: %w", err)
+			}
+		}
+	}
+	if err := os.Rename(temporaryName, filepath.Join(bookDir, SourceFilePrefix+extension)); err != nil {
+		return fmt.Errorf("store Source File: %w", err)
+	}
+	return nil
+}
+
+// book confirms a Book exists without making callers depend on the whole
+// Library's rendering-oriented traversal.
+func (s Store) book(seriesCode, bookCode string) (Series, Book, bool) {
+	series, err := s.series(seriesCode)
+	if err != nil {
+		return Series{}, Book{}, false
+	}
+	return (Library{Series: []Series{series}}).Book(seriesCode, bookCode)
+}
+
+// sourceFile finds the one Source File a Book may have. Both names are checked
+// explicitly so an unexpected user file is never mistaken for source material.
+func sourceFile(bookDir string) (string, error) {
+	for _, name := range []string{SourceFilePrefix + ".txt", SourceFilePrefix + ".fb2"} {
+		_, err := os.Stat(filepath.Join(bookDir, name))
+		if err == nil {
+			return name, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("read Source File: %w", err)
+		}
+	}
+	return "", nil
 }
 
 // DeleteTranslationTarget abandons only the requested language pair.

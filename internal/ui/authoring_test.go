@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"bytes"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,6 +19,32 @@ import (
 func postForm(s *Server, path string, values url.Values) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(http.MethodPost, s.URL()+path, strings.NewReader(values.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	r.Header.Set("HX-Request", "true")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, r)
+	return rec
+}
+
+func postSourceFile(s *Server, path, name, contents string, confirmed bool) *httptest.ResponseRecorder {
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	file, err := form.CreateFormFile("source", name)
+	if err != nil {
+		panic(err)
+	}
+	if _, err := file.Write([]byte(contents)); err != nil {
+		panic(err)
+	}
+	if confirmed {
+		if err := form.WriteField("confirmed", "true"); err != nil {
+			panic(err)
+		}
+	}
+	if err := form.Close(); err != nil {
+		panic(err)
+	}
+	r := httptest.NewRequest(http.MethodPost, s.URL()+path, &body)
+	r.Header.Set("Content-Type", form.FormDataContentType())
 	r.Header.Set("HX-Request", "true")
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, r)
@@ -200,6 +228,38 @@ func TestWorkspaceTargetLanguagesCreateAndRenderTranslationTargets(t *testing.T)
 	}
 	if _, err := os.Stat(filepath.Join(root, "solaris", "books", "solaris", "translations", "pl-to-uk", "state.json")); err != nil {
 		t.Fatalf("target state was not written: %v", err)
+	}
+}
+
+func TestBookDetailsUploadAndReplaceASourceFile(t *testing.T) {
+	s, root := newEmptyLibraryServer(t)
+	if rec := postForm(s, "/series", url.Values{"name": {"Solaris"}, "language": {"pl"}}); strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("CreateSeries: %s", rec.Body.String())
+	}
+	if rec := postForm(s, "/books", url.Values{"series": {"solaris"}, "code": {"solaris"}}); strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("AddBook: %s", rec.Body.String())
+	}
+	path := "/series/solaris/books/solaris/source"
+	if body := serve(s, request(s, "/series/solaris/books/solaris")).Body.String(); !strings.Contains(body, "No Source File uploaded") || !strings.Contains(body, "Upload Source File") {
+		t.Fatalf("a Book without a Source File is not visibly actionable: %s", body)
+	}
+
+	if rec := postSourceFile(s, path, "solaris.txt", "original", false); !strings.Contains(rec.Body.String(), "source.txt") {
+		t.Fatalf("uploaded Source File is not shown: %s", rec.Body.String())
+	}
+	stored := filepath.Join(root, "solaris", "books", "solaris", "source.txt")
+	if got := read(t, stored); got != "original" {
+		t.Errorf("stored Source File = %q", got)
+	}
+
+	if rec := postSourceFile(s, path, "solaris.fb2", "replacement", false); !strings.Contains(rec.Body.String(), "discards all existing translation work") {
+		t.Fatalf("replacement warning is not shown: %s", rec.Body.String())
+	}
+	if got := read(t, stored); got != "original" {
+		t.Errorf("warning request changed the Source File to %q", got)
+	}
+	if rec := postSourceFile(s, path, "solaris.fb2", "replacement", true); !strings.Contains(rec.Body.String(), "source.fb2") {
+		t.Fatalf("confirmed replacement is not shown: %s", rec.Body.String())
 	}
 }
 

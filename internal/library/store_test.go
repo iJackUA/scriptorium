@@ -1,6 +1,7 @@
 package library
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -85,6 +86,81 @@ func TestCreatingATranslationTargetWritesNewState(t *testing.T) {
 	}
 	if got := lib.Series[0].Books[0].Targets; len(got) != 1 || got[0] != target {
 		t.Errorf("Targets = %+v, want [%+v]", got, target)
+	}
+}
+
+func TestUploadingASourceFileStoresItsOriginalBytes(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	supplied := []byte("\xfforiginal\x00text\n")
+
+	if err := s.UploadSourceFile(series.Code, "solaris", "novel.txt", bytes.NewReader(supplied), false); err != nil {
+		t.Fatalf("UploadSourceFile: %v", err)
+	}
+
+	path := filepath.Join(s.root, series.Code, BooksDir, "solaris", "source.txt")
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read stored Source File: %v", err)
+	}
+	if !bytes.Equal(stored, supplied) {
+		t.Errorf("stored bytes = %q, want %q", stored, supplied)
+	}
+}
+
+func TestUploadingAnUnsupportedSourceFileLeavesTheBookAlone(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	bookDir := filepath.Join(s.root, series.Code, BooksDir, "solaris")
+
+	err := s.UploadSourceFile(series.Code, "solaris", "novel.epub", strings.NewReader("not an ebook we accept"), false)
+	if err == nil || !strings.Contains(err.Error(), ".txt or .fb2") {
+		t.Fatalf("UploadSourceFile error = %v, want a clear format rejection", err)
+	}
+	entries, err := os.ReadDir(bookDir)
+	if err != nil {
+		t.Fatalf("read Book folder: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != BookFile {
+		t.Errorf("unsupported upload wrote %v", entries)
+	}
+}
+
+func TestReplacingASourceFileNeedsConfirmationAndDiscardsTranslationWork(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	if err := s.UploadSourceFile(series.Code, "solaris", "old.txt", strings.NewReader("old"), false); err != nil {
+		t.Fatalf("initial UploadSourceFile: %v", err)
+	}
+	if _, err := s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"}); err != nil {
+		t.Fatalf("CreateTranslationTarget: %v", err)
+	}
+
+	if err := s.UploadSourceFile(series.Code, "solaris", "replacement.fb2", strings.NewReader("replacement"), false); !errors.Is(err, ErrSourceReplacementNeedsConfirmation) {
+		t.Fatalf("unconfirmed replacement error = %v, want confirmation", err)
+	}
+	if got := read(t, filepath.Join(s.root, series.Code, BooksDir, "solaris", "source.txt")); got != "old" {
+		t.Errorf("unconfirmed replacement changed the Source File to %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(s.root, series.Code, BooksDir, "solaris", TranslationsDir, "pl-to-uk", StateFile)); err != nil {
+		t.Errorf("unconfirmed replacement discarded translation work: %v", err)
+	}
+
+	if err := s.UploadSourceFile(series.Code, "solaris", "replacement.fb2", strings.NewReader("replacement"), true); err != nil {
+		t.Fatalf("confirmed UploadSourceFile: %v", err)
+	}
+	bookDir := filepath.Join(s.root, series.Code, BooksDir, "solaris")
+	if got := read(t, filepath.Join(bookDir, "source.fb2")); got != "replacement" {
+		t.Errorf("replacement Source File = %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(bookDir, "source.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("old Source File survives replacement: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bookDir, TranslationsDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("translation work survives confirmed replacement: %v", err)
 	}
 }
 

@@ -9,6 +9,26 @@
       <dt class="opacity-60">Series</dt><dd>{{.Series.Name}}</dd>
       <dt class="opacity-60">Source language</dt><dd>{{languageName .Series.SourceLanguage}} ({{.Series.SourceLanguage}})</dd>
     </dl>
+    <div class="divider my-1">Source File</div>
+    {{if .Book.SourceFile}}
+      <p><code>{{.Book.SourceFile}}</code></p>
+      <button class="btn btn-warning btn-sm" type="button" onclick="this.nextElementSibling.showModal()">Replace Source File</button>
+      <dialog class="modal"><div class="modal-box">
+        <h3 class="font-bold text-lg">Replace the Source File?</h3>
+        <p class="py-4">This discards all existing translation work for this Book.</p>
+        <form hx-post="/series/{{.Series.Code}}/books/{{.Book.Code}}/source" hx-encoding="multipart/form-data" hx-target="#book-detail" hx-swap="innerHTML">
+          <input type="hidden" name="confirmed" value="true">
+          <input class="file-input w-full" type="file" name="source" accept=".txt,.fb2" required>
+          <div class="modal-action"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-warning" type="submit">Replace and discard translation work</button></div>
+        </form>
+      </div></dialog>
+    {{else}}
+      <p class="opacity-60">No Source File uploaded. Upload one before starting Dictionary Building or translation.</p>
+      <form hx-post="/series/{{.Series.Code}}/books/{{.Book.Code}}/source" hx-encoding="multipart/form-data" hx-target="#book-detail" hx-swap="innerHTML" class="flex gap-2">
+        <input class="file-input flex-1" type="file" name="source" accept=".txt,.fb2" required>
+        <button class="btn btn-primary" type="submit">Upload Source File</button>
+      </form>
+    {{end}}
     <div class="divider my-1">Translation Targets</div>
     <ul class="flex flex-col gap-2">
       {{range .Book.Targets}}

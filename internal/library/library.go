@@ -26,10 +26,11 @@ type TranslationTarget struct {
 // Book is a single work belonging to exactly one Series. Its Book Code names
 // the folder it is stored under.
 type Book struct {
-	Code    string
-	Title   string
-	Author  string
-	Targets []TranslationTarget
+	Code       string
+	Title      string
+	Author     string
+	SourceFile string
+	Targets    []TranslationTarget
 }
 
 // Label is what to call the Book on screen.
