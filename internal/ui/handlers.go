@@ -83,6 +83,7 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets", s.createTarget)
 	mux.HandleFunc("DELETE /series/{series}/books/{book}/targets/{target}", s.deleteTarget)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary", s.startDictionaryBuilding)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/stop", s.stopDictionaryBuilding)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary-progress", s.dictionaryProgress)
 	return mux
 }
@@ -95,30 +96,75 @@ type screens struct {
 }
 
 type dictionaryRuns struct {
-	mu       sync.Mutex
-	progress map[string]translation.DictionaryProgress
+	mu     sync.Mutex
+	nextID uint64
+	runs   map[string]dictionaryRun
+}
+
+type dictionaryRun struct {
+	id       uint64
+	cancel   context.CancelFunc
+	progress translation.DictionaryProgress
 }
 
 func newDictionaryRuns() *dictionaryRuns {
-	return &dictionaryRuns{progress: make(map[string]translation.DictionaryProgress)}
+	return &dictionaryRuns{runs: make(map[string]dictionaryRun)}
 }
 
-func (r *dictionaryRuns) set(key string, progress translation.DictionaryProgress) {
+func (r *dictionaryRuns) start(key string, progress translation.DictionaryProgress) (context.Context, uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.progress[key] = progress
+	r.nextID++
+	ctx, cancel := context.WithCancel(context.Background())
+	r.runs[key] = dictionaryRun{id: r.nextID, cancel: cancel, progress: progress}
+	return ctx, r.nextID
+}
+
+func (r *dictionaryRuns) set(key string, id uint64, progress translation.DictionaryProgress) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run, ok := r.runs[key]
+	if ok && run.id == id {
+		run.progress = progress
+		r.runs[key] = run
+	}
 }
 
 func (r *dictionaryRuns) get(key string) translation.DictionaryProgress {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.progress[key]
+	return r.runs[key].progress
 }
 
-func (r *dictionaryRuns) clear(key string) {
+func (r *dictionaryRuns) stop(key string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.progress, key)
+	if run, ok := r.runs[key]; ok {
+		run.cancel()
+		delete(r.runs, key)
+	}
+}
+
+func (r *dictionaryRuns) clear(key string, id uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if run, ok := r.runs[key]; ok && run.id == id {
+		delete(r.runs, key)
+	}
+}
+
+// finish serializes terminal Status writes with Stop. If Stop wins, it removes
+// this run and writes New; a late completion must not overwrite that choice.
+func (r *dictionaryRuns) finish(key string, id uint64, update func()) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run, ok := r.runs[key]
+	if !ok || run.id != id {
+		return false
+	}
+	update()
+	delete(r.runs, key)
+	return true
 }
 
 func (s screens) createSeries(w http.ResponseWriter, r *http.Request) {
@@ -302,19 +348,39 @@ func (s screens) startDictionaryBuilding(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	key := dictionaryKey(seriesCode, bookCode, targetLanguage)
-	s.dictionaryRuns.set(key, translation.DictionaryProgress{Active: 1, Total: len(translation.ChunkNodes(document.TextNodes(), 0))})
+	ctx, runID := s.dictionaryRuns.start(key, translation.DictionaryProgress{Active: 1, Total: len(translation.ChunkNodes(document.TextNodes(), 0))})
 	ws, _ := s.session.Current()
-	go s.buildDictionary(context.Background(), store, ws.Root, ws.Config, series, book, targetLanguage, key)
+	go s.buildDictionary(ctx, store, ws.Root, ws.Config, series, book, targetLanguage, key, runID)
 	s.bookDetail(w, r)
 }
 
-func (s screens) buildDictionary(ctx context.Context, store library.Store, workspaceRoot string, config workspace.Config, series library.Series, book library.Book, targetLanguage, key string) {
-	defer s.dictionaryRuns.clear(key)
+func (s screens) stopDictionaryBuilding(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	seriesCode, bookCode, targetLanguage := r.PathValue("series"), r.PathValue("book"), r.PathValue("target")
+	key := dictionaryKey(seriesCode, bookCode, targetLanguage)
+	s.dictionaryRuns.stop(key)
+	if err := store.SetTranslationTargetStatus(seriesCode, bookCode, targetLanguage, library.StatusNew); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	s.bookDetail(w, r)
+}
+
+func (s screens) buildDictionary(ctx context.Context, store library.Store, workspaceRoot string, config workspace.Config, series library.Series, book library.Book, targetLanguage, key string, runID uint64) {
+	defer s.dictionaryRuns.clear(key, runID)
 	fail := func(err error) {
-		log.Printf("Dictionary Building for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
-		if statusErr := store.SetTranslationTargetStatus(series.Code, book.Code, targetLanguage, library.StatusFailed); statusErr != nil {
-			log.Printf("record Dictionary Building failure: %v", statusErr)
+		if ctx.Err() != nil {
+			return
 		}
+		log.Printf("Dictionary Building for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
+		s.dictionaryRuns.finish(key, runID, func() {
+			if statusErr := store.SetTranslationTargetStatus(series.Code, book.Code, targetLanguage, library.StatusFailed); statusErr != nil {
+				log.Printf("record Dictionary Building failure: %v", statusErr)
+			}
+		})
 	}
 	source, filename, err := store.SourceFile(series.Code, book.Code)
 	if err != nil {
@@ -337,7 +403,7 @@ func (s screens) buildDictionary(ctx context.Context, store library.Store, works
 		return
 	}
 	terms, err := (translation.DictionaryBuilder{Agent: client, MechanicalModel: config.Models.Mechanical, OccurrenceThreshold: config.DictionaryOccurrenceThreshold}).Build(ctx, document.TextNodes(), series.SourceLanguage, targetLanguage, func(progress translation.DictionaryProgress) {
-		s.dictionaryRuns.set(key, progress)
+		s.dictionaryRuns.set(key, runID, progress)
 	})
 	if err != nil {
 		fail(err)
@@ -347,9 +413,11 @@ func (s screens) buildDictionary(ctx context.Context, store library.Store, works
 		fail(err)
 		return
 	}
-	if err := store.SetTranslationTargetStatus(series.Code, book.Code, targetLanguage, library.StatusDictionaryReady); err != nil {
-		log.Printf("record Dictionary Building completion: %v", err)
-	}
+	s.dictionaryRuns.finish(key, runID, func() {
+		if err := store.SetTranslationTargetStatus(series.Code, book.Code, targetLanguage, library.StatusDictionaryReady); err != nil {
+			log.Printf("record Dictionary Building completion: %v", err)
+		}
+	})
 }
 
 func parseSourceFile(filename string, source []byte) (format.Document, error) {

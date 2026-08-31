@@ -30,6 +30,12 @@ type Server struct {
 // The library is not passed in: it is read out of whichever workspace the
 // session has open, which is not known until the user has chosen one.
 func NewServer(session *workspace.Session) (*Server, error) {
+	return newServer(session, agent.NewWithLogger)
+}
+
+// newServer lets handler tests supply an Agent that can be held or cancelled
+// without starting an external CLI process.
+func newServer(session *workspace.Session, agents func(string, agent.Logger) (agent.Agent, error)) (*Server, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("bind loopback listener: %w", err)
@@ -47,7 +53,7 @@ func NewServer(session *workspace.Session) (*Server, error) {
 
 	s := &Server{
 		listener: listener,
-		handler:  requireLocalCaller(local, origins, routes(session, agent.NewWithLogger)),
+		handler:  requireLocalCaller(local, origins, routes(session, agents)),
 	}
 	s.http = &http.Server{
 		Handler: s.handler,

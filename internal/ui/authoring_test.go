@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -10,7 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ijackua/scriptorium/internal/agent"
 	"github.com/ijackua/scriptorium/internal/library"
 	"github.com/ijackua/scriptorium/internal/translation"
 	"github.com/ijackua/scriptorium/internal/workspace"
@@ -305,6 +308,62 @@ func TestDictionaryBuildingShowsTheActiveChunkAndRefreshesIt(t *testing.T) {
 			t.Errorf("Dictionary progress does not render %q:\n%s", want, body)
 		}
 	}
+}
+
+func TestStoppingDictionaryBuildingCancelsTheAgentAndRestoresNew(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Solaris", "pl")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "solaris"})
+	if err := store.UploadSourceFile(series.Code, "solaris", "solaris.txt", strings.NewReader("Holmes"), false); err != nil {
+		t.Fatalf("UploadSourceFile: %v", err)
+	}
+	if _, err := store.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"}); err != nil {
+		t.Fatalf("CreateTranslationTarget: %v", err)
+	}
+	blocked := &cancellableAgent{started: make(chan struct{}, 1), cancelled: make(chan struct{}, 1)}
+	s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return blocked, nil })
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	path := "/series/solaris/books/solaris/targets/uk/dictionary"
+	postForm(s, path, url.Values{})
+	select {
+	case <-blocked.started:
+	case <-time.After(time.Second):
+		t.Fatal("Dictionary Building did not call its Agent")
+	}
+
+	stopped := postForm(s, path+"/stop", url.Values{})
+	if !strings.Contains(stopped.Body.String(), "Start Dictionary Building") {
+		t.Fatalf("stopping did not restore the start action: %s", stopped.Body.String())
+	}
+	select {
+	case <-blocked.cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("stopping did not cancel the Agent context")
+	}
+	lib, err := store.Library()
+	if err != nil {
+		t.Fatalf("Library: %v", err)
+	}
+	if got := lib.Series[0].Books[0].Targets[0].Status; got != library.StatusNew {
+		t.Errorf("Status = %q, want New", got)
+	}
+}
+
+type cancellableAgent struct {
+	started   chan struct{}
+	cancelled chan struct{}
+}
+
+func (a *cancellableAgent) Call(ctx context.Context, _ agent.Request) (agent.Response, error) {
+	a.started <- struct{}{}
+	<-ctx.Done()
+	a.cancelled <- struct{}{}
+	return agent.Response{}, ctx.Err()
 }
 
 // The gap ticket 02 left for this one: a workspace that already has a
