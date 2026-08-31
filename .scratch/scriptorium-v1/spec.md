@@ -106,11 +106,12 @@ All terms carry the meanings defined in `CONTEXT.md`. In particular: **Status an
 
 ### Architectural constraints already decided
 
-Three ADRs govern this work and must be respected rather than re-litigated:
+Four ADRs govern this work and must be respected rather than re-litigated:
 
 - **ADR-0001** — translation runs by spawning the `claude` CLI as a subprocess, not by calling an HTTP API. The justification is subscription economics.
 - **ADR-0002** — the Agent is never shown markup. Text is extracted, translated, and spliced back into the original document tree.
 - **ADR-0003** — Chunks are translated serially, because each depends on the previous Chunk's accepted translation.
+- **ADR-0005** — each processing stage is persisted as indexed plain text, and Book Composition reads those persisted artifacts rather than relying on in-memory results.
 
 ### Workspace schema
 
@@ -127,15 +128,24 @@ State lives in plain files under a single workspace root chosen on first launch.
     books/<book-code>/
       book.toml                       metadata, Agent and Model override
       source.<ext>                    Source File, never modified
+      chunks/
+        manifest.json                 Source File identity and Text Node/Chunk mapping
+        original/<chunk-index>.txt    Book-level original Chunk artifacts
       translations/<source>-to-<target>/
         dictionary.tsv                Book Dictionary
-        state.json                    progress, resumable
+        state.json                    progress and active input fingerprints
+        chunks/
+          translated/<chunk-index>.txt
+                                      accepted Chunk Translations
+          rejected/<chunk-index>.txt  latest rejected Agent response
         out/<book-code>.<target>.<ext>
+        out/<book-code>.<target>.partial.<ext>
+                                      diagnostic partial composition
 ```
 
 Two format families, chosen deliberately: **TOML** for anything a human edits, because comments survive; **JSON** for machine-written progress, which is rewritten constantly and not meant for human eyes. Dictionaries are **TSV** (`original`, `translation`, `note`) because they are hand-edited *and* machine-generated, and a line-oriented format is far more robust to model output than YAML's indentation rules.
 
-`state.json` is the only file that must be crash-safe: write to a temporary file and rename, so an interrupted write can never leave a book unresumable. A newly created Translation Target starts with the machine-readable value `{ "status": "new" }`; UI labels map machine values to the canonical Status names.
+`state.json` is the crash-safe progress record: write it to a temporary file and rename it. Chunk artifacts are also written to temporary files and renamed into place. A newly created Translation Target starts with the machine-readable value `{ "status": "new" }`; UI labels map machine values to the canonical Status names. `state.json` stores the Translation Target status, active Source File and Dictionary fingerprints, and per Chunk index, status, cost, and attempts; it never stores the original or translated prose.
 
 ### Language model
 
@@ -170,6 +180,18 @@ Chunks are built to a word budget of roughly 2,000 words, never splitting a Text
 
 Each request carries a **Continuity Window**: the tail of the previous Chunk's source text and its accepted translation, explicitly marked as reference material not to be translated. Continuity resets at Chapter boundaries.
 
+### Persisted processing artifacts
+
+After parsing and chunking, the service creates a Chunk Materialization before it sends the first request to the Agent. Every original Chunk is written as a human-readable plain-text file under the Book's `chunks/original/` directory. The file uses the numbered-Text-Node protocol, so every prose value carries its global Text Node index and Chapter-boundary information remains recoverable from `manifest.json`. No FB2 markup is written into these files or shown to the Agent.
+
+Each accepted Agent response is written as a Chunk Translation under the active Translation Target's `chunks/translated/` directory. A malformed or rejected response is preserved as the latest file under `chunks/rejected/`; it is never eligible for Book Composition. A valid manually edited Chunk Translation is authoritative, provided its numbered node mapping remains valid. Accepted translations are overwritten in place when repaired or retranslated; no accepted-translation history is kept.
+
+The write order is: materialize all original Chunks, write the manifest, write each accepted Chunk Translation, then mark that Chunk completed in `state.json`. Every write uses a temporary file and rename. On restart, no Agent request or repair starts automatically. The user can explicitly run **Validate and Repair**, which checks only `state.json` and translated Chunk files, promotes valid translated files whose state update was interrupted, and re-requests missing or malformed translations. Original Chunk files are not part of that validation.
+
+Normal completion automatically performs Book Composition only when every Chunk Translation is valid. It reads the persisted translated Chunk files, validates their global node indices, reconstructs the complete ordered Text Node list, and passes that list to the format handler. Plain-text Chunks are never concatenated into an FB2. The final output is written atomically.
+
+The user can also run **Compose translated book** explicitly. This action never invokes the Agent, repairs nothing, or changes `state.json`. It uses valid available Chunk Translations, falls back to original Text Nodes for missing or malformed Chunks, and writes a clearly marked partial output if any translation is unavailable. It performs a quick state check and warns when the result is not fully translated. If an original Chunk is unavailable for this diagnostic operation, it is regenerated from the current Source File in memory.
+
 ### The numbered-node protocol
 
 This is the load-bearing safety mechanism of the whole design. Because translations are spliced back **by position**, a Chunk that returns fewer Text Nodes than it was sent shifts every later translation into the wrong slot — producing a structurally valid file that is quietly scrambled from that point onward, which a reader would not notice until reading it.
@@ -195,7 +217,7 @@ The full Dictionary is injected into every translation request without filtering
 
 ### Resume
 
-`state.json` records per Chunk: index, status, a hash of the source text, and cost. On restart only `pending` and `failed` Chunks are re-requested. Hashing means a Dictionary edit or a source change invalidates the affected Chunks rather than all of them, and re-running is always safe.
+`state.json` records the Translation Target status, active Source File and Dictionary fingerprints, and per Chunk index, status, cost, and attempts. On restart no Agent request or repair starts automatically. **Validate and Repair** re-requests only missing, failed, or malformed translated Chunks, while valid translated files whose state update was interrupted are promoted without another request. A Dictionary edit invalidates the affected translated Chunks; replacing the Source File discards the old materialization and its translation artifacts. Re-running is always safe.
 
 ### Prompts
 
@@ -217,11 +239,15 @@ Tests assert **external behaviour**: the file produced, the state recorded, and 
 
 There is **one substitution seam: the Agent interface.** It is the only slow, costly, nondeterministic dependency, and faking it is what makes the whole suite fast and repeatable. The fake is both stub and spy — scripted responses going in, a recorded transcript of requests coming out. That dual role is what keeps the seam count at one: chunking, continuity, and Dictionary injection are invisible in the output file but plainly visible in the recorded requests.
 
-Tests are driven through the **service layer** over a temporary workspace directory, and observe exactly three things: the output file, `state.json`, and the recorded Agent requests. The HTTP handlers are deliberately not tested — they are thin adapters, and driving server-sent events through a test server is high cost for low value. Keeping them thin is a design obligation that follows from this decision.
+Tests are driven through the **service layer** over a temporary workspace directory, and observe the output file, persisted original and translated Chunk artifacts, `state.json`, and the recorded Agent requests. The HTTP handlers are deliberately not tested — they are thin adapters, and driving server-sent events through a test server is high cost for low value. Keeping them thin is a design obligation that follows from this decision.
 
 ### What gets tested through the seam
 
 - **Splice fidelity** — a real fb2 in, a translated fb2 out, structure asserted identical. This is ADR-0002's central claim.
+- **Materialization** — parsing and chunking persist every original Chunk with stable global Text Node indices before the first Agent request.
+- **Interrupted persistence** — a process stopped after writing a translated Chunk but before updating `state.json` does not pay for that Chunk again after Validate and Repair.
+- **Validation and repair** — missing or malformed translated files are re-requested, while valid manually edited files are retained and used.
+- **Diagnostic composition** — Compose translated book can produce a marked partial output with original-Text-Node fallbacks without changing state or calling the Agent.
 - **Chunking** — recorded requests respect the word budget and never cross a Chapter.
 - **Continuity** — request *N* contains the translation returned for request *N-1*.
 - **Serial execution** — recorded requests are strictly ordered and never overlap, as required by ADR-0003.
@@ -236,7 +262,7 @@ Tests are driven through the **service layer** over a temporary workspace direct
 
 ### What gets tested directly, with no seam
 
-The format handlers are pure functions and need no fake. The important one is a **round-trip property**: parse a Source File to Text Nodes, splice back with an identity translation, and assert the output is equivalent to the input. ADR-0002 claims structure is preserved *by construction*; this is the test that proves it, and it should run over a corpus of real fb2 files including awkward ones — nested markup, footnotes, empty paragraphs, poetry blocks.
+The format handlers are pure functions and need no fake. The important one is a **round-trip property**: parse a Source File to Text Nodes, splice back with an identity translation, and assert the output is equivalent to the input. ADR-0002 claims structure is preserved *by construction*; this is the test that proves it, and it should run over a corpus of real fb2 files including awkward ones — nested markup, footnotes, empty paragraphs, poetry blocks. Persistence and recovery belong to the service layer: the handler receives the complete ordered Text Node list reconstructed from persisted Chunk files.
 
 The chunker and the validator are likewise pure and cheap to test directly for their edge cases, though their integration is covered through the seam.
 

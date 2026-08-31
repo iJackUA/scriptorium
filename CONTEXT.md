@@ -64,6 +64,18 @@ _Avoid_: section, part, division
 A run of consecutive Text Nodes sent to the Agent as a single request, bounded by a word budget and never crossing a Chapter boundary. The unit of progress, failure, and resumption.
 _Avoid_: batch, block, window, piece, segment
 
+**Chunk Materialization**:
+The Book-level, persisted representation of a Source File's ordered Text Nodes and Chapter boundaries, ready to be translated and reused for resumption.
+_Avoid_: parse cache, intermediate output, source copy
+
+**Chunk Translation**:
+The accepted translation of one Chunk, retaining the global Text Node indices needed to place it back into the Source File.
+_Avoid_: translated fragment, output piece
+
+**Book Composition**:
+The operation that places accepted Chunk Translations into the original document tree to produce a translated Book.
+_Avoid_: concatenation, reassembly
+
 **Continuity Window**:
 The tail of the preceding Chunk's source text and its accepted translation, supplied as reference so register and terminology carry across Chunk boundaries. Never itself translated.
 _Avoid_: context, history, overlap, memory

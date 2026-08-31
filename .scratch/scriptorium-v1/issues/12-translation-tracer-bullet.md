@@ -10,9 +10,9 @@ Chunks are translated **serially** (ADR-0003), each request carrying:
 
 The prompt is a template with documented slots for source and target language, the Dictionary, the Continuity Window, and the numbered-node instructions. The built-in default ships with the application; per-Series overrides come later.
 
-`state.json` records per Chunk: index, status, a hash of the source text, and cost. It is the only file that must be crash-safe — write to a temporary file and rename, so an interrupted write can never leave a book unresumable.
+Before the first Agent request, parsing and chunking persist a Book-level Chunk Materialization under `chunks/original/`, with stable global Text Node indices and a manifest. Each accepted response is persisted under the Translation Target's `chunks/translated/` directory before `state.json` marks that Chunk completed. `state.json` records the Translation Target status, active Source File and Dictionary fingerprints, and per Chunk index, status, cost, and attempts; it never stores prose. Every artifact and state update is written to a temporary file and renamed, so an interrupted write cannot silently lose accepted work.
 
-Tests drive the service layer over a temporary workspace and observe exactly three things: the output file, `state.json`, and the recorded Agent requests.
+Tests drive the service layer over a temporary workspace and observe the output file, persisted original and translated Chunk artifacts, `state.json`, and the recorded Agent requests.
 
 **Blocked by:** 05 — Source File upload; 08 — Agent interface, `claude` adapter, and the fake; 09 — Chunker and numbered-node validator; 11 — Dictionary review, override, and promotion.
 
@@ -21,6 +21,8 @@ Tests drive the service layer over a temporary workspace and observe exactly thr
 - [ ] A real fb2 in, a translated fb2 out, with structure asserted identical — ADR-0002's central claim
 - [ ] The output lands at `translations/<pair>/out/<book-code>.<target>.<ext>`, so translations of one Book never collide
 - [ ] The Source File is byte-for-byte unchanged after a full run
+- [ ] Original and accepted translated Chunks are persisted with stable global Text Node indices before final Book Composition
+- [ ] The final output is composed from persisted Chunk Translations rather than in-memory Agent responses
 - [ ] Recorded requests are strictly ordered and never overlap, as ADR-0003 requires
 - [ ] Request *N* contains the translation returned for request *N-1*, and the Continuity Window is marked as not to be translated
 - [ ] The Continuity Window is empty at the start of each Chapter
