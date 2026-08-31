@@ -263,6 +263,30 @@ func TestBookDetailsUploadAndReplaceASourceFile(t *testing.T) {
 	}
 }
 
+func TestNewTranslationTargetWithASourceFileOffersDictionaryBuilding(t *testing.T) {
+	s, _ := newEmptyLibraryServer(t)
+	if rec := postForm(s, "/settings/target-languages", url.Values{"languages": {"uk"}}); strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("Set Target Languages: %s", rec.Body.String())
+	}
+	if rec := postForm(s, "/series", url.Values{"name": {"Solaris"}, "language": {"pl"}}); strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("CreateSeries: %s", rec.Body.String())
+	}
+	if rec := postForm(s, "/books", url.Values{"series": {"solaris"}, "code": {"solaris"}}); strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("AddBook: %s", rec.Body.String())
+	}
+	if rec := postSourceFile(s, "/series/solaris/books/solaris/source", "solaris.txt", "Solaris", false); strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("UploadSourceFile: %s", rec.Body.String())
+	}
+	if rec := postForm(s, "/series/solaris/books/solaris/targets", url.Values{"language": {"uk"}}); strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("CreateTranslationTarget: %s", rec.Body.String())
+	}
+
+	body := serve(s, request(s, "/series/solaris/books/solaris")).Body.String()
+	if !strings.Contains(body, "Start Dictionary Building") {
+		t.Errorf("new Target with a Source File does not offer Dictionary Building:\n%s", body)
+	}
+}
+
 // The gap ticket 02 left for this one: a workspace that already has a
 // workspace.toml opens cleanly however locked down it is, and only the first
 // write finds out. This is where the first write lives.

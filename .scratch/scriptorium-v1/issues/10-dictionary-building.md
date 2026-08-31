@@ -13,13 +13,17 @@ The occurrence threshold is a guess and should be tunable while the first real b
 
 **Blocked by:** 05 — Source File upload; 08 — Agent interface, `claude` adapter, and the fake; 09 — Chunker and numbered-node validator.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Starting Dictionary Building moves the Translation Target's Status to `Analyzing`, and to `Dictionary Ready` on completion
-- [ ] Extraction requests carry no translation instruction, asserted against the recorded Agent requests
-- [ ] Extraction runs on the cheap Model, Term translation on whichever Model is configured for mechanical work
-- [ ] Candidate Terms are merged across Chunks with occurrence counts
-- [ ] Terms below the occurrence threshold are dropped; the threshold is configurable
-- [ ] Term translation happens in exactly one request with the whole surviving list present, asserted against the recorded requests
-- [ ] The result is written to `translations/<pair>/dictionary.tsv` as `original`, `translation`, `note`
-- [ ] Progress through the Book is visible while the run is in flight
+- [x] Starting Dictionary Building moves the Translation Target's Status to `Analyzing`, and to `Dictionary Ready` on completion
+- [x] Extraction requests carry no translation instruction, asserted against the recorded Agent requests
+- [x] Extraction runs on the cheap Model, Term translation on whichever Model is configured for mechanical work
+- [x] Candidate Terms are merged across Chunks with occurrence counts
+- [x] Terms below the occurrence threshold are dropped; the threshold is configurable
+- [x] Term translation happens in exactly one request with the whole surviving list present, asserted against the recorded requests
+- [x] The result is written to `translations/<pair>/dictionary.tsv` as `original`, `translation`, `note`
+- [x] Progress through the Book is visible while the run is in flight
+
+## Comments
+
+2026-08-31: Verified with focused package/UI tests and `make check`. The headless server rendered its fixture library successfully over loopback; interactive browser verification could not run because no in-app browser backend was available. The UI test covers the rendered Dictionary Building control, and the Dictionary builder test covers the in-flight progress callback and recorded Agent transcript.

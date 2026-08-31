@@ -2,14 +2,23 @@ package ui
 
 import (
 	"bytes"
+	"context"
 	"embed"
+	"fmt"
 	"html/template"
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/ijackua/scriptorium/internal/agent"
+	"github.com/ijackua/scriptorium/internal/format"
+	"github.com/ijackua/scriptorium/internal/format/fb2"
+	"github.com/ijackua/scriptorium/internal/format/txt"
 	"github.com/ijackua/scriptorium/internal/library"
+	"github.com/ijackua/scriptorium/internal/translation"
 	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
@@ -43,8 +52,8 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 // They hang off a screens value rather than closing over the session, so that
 // "which workspace is open" is answered in one place instead of threaded
 // through every handler as an argument.
-func routes(session *workspace.Session) http.Handler {
-	s := screens{session: session}
+func routes(session *workspace.Session, agents func(string) (agent.Agent, error)) http.Handler {
+	s := screens{session: session, agents: agents, dictionaryRuns: newDictionaryRuns()}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", noDirectoryListing(http.FileServerFS(staticFS)))
@@ -73,12 +82,43 @@ func routes(session *workspace.Session) http.Handler {
 	mux.HandleFunc("POST /series/{series}/books/{book}/source", s.uploadSourceFile)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets", s.createTarget)
 	mux.HandleFunc("DELETE /series/{series}/books/{book}/targets/{target}", s.deleteTarget)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary", s.startDictionaryBuilding)
+	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary-progress", s.dictionaryProgress)
 	return mux
 }
 
 // screens renders the interface over whichever workspace the session has open.
 type screens struct {
-	session *workspace.Session
+	session        *workspace.Session
+	agents         func(string) (agent.Agent, error)
+	dictionaryRuns *dictionaryRuns
+}
+
+type dictionaryRuns struct {
+	mu       sync.Mutex
+	progress map[string]translation.DictionaryProgress
+}
+
+func newDictionaryRuns() *dictionaryRuns {
+	return &dictionaryRuns{progress: make(map[string]translation.DictionaryProgress)}
+}
+
+func (r *dictionaryRuns) set(key string, progress translation.DictionaryProgress) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.progress[key] = progress
+}
+
+func (r *dictionaryRuns) get(key string) translation.DictionaryProgress {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.progress[key]
+}
+
+func (r *dictionaryRuns) clear(key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.progress, key)
 }
 
 func (s screens) createSeries(w http.ResponseWriter, r *http.Request) {
@@ -144,24 +184,7 @@ func (s screens) bookDetail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	ws, _ := s.session.Current()
-	allowed := make([]targetOption, 0, len(ws.Config.Languages))
-	existing := make(map[string]library.Status, len(book.Targets))
-	for _, target := range book.Targets {
-		existing[target.Language] = target.Status
-	}
-	for _, tag := range ws.Config.Languages {
-		language, ok := workspace.LanguageFor(tag)
-		if ok && tag != series.SourceLanguage {
-			allowed = append(allowed, targetOption{Language: language, Status: existing[tag]})
-		}
-	}
-	fragment(w, "book-detail", struct {
-		Series  library.Series
-		Book    library.Book
-		Allowed []targetOption
-		Problem string
-	}{series, book, allowed, ""})
+	fragment(w, "book-detail", s.bookDetailData(series, book, ""))
 }
 
 func (s screens) uploadSourceFile(w http.ResponseWriter, r *http.Request) {
@@ -237,6 +260,108 @@ func (s screens) deleteTarget(w http.ResponseWriter, r *http.Request) {
 	s.bookDetail(w, r)
 }
 
+func (s screens) startDictionaryBuilding(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	seriesCode, bookCode, targetLanguage := r.PathValue("series"), r.PathValue("book"), r.PathValue("target")
+	lib, err := store.Library()
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	series, book, found := lib.Book(seriesCode, bookCode)
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	var target library.TranslationTarget
+	for _, candidate := range book.Targets {
+		if candidate.Language == targetLanguage {
+			target = candidate
+			break
+		}
+	}
+	if target.Language == "" || target.Status != library.StatusNew {
+		s.detail(w, r, "Dictionary Building can only start for a new Translation Target")
+		return
+	}
+	source, filename, err := store.SourceFile(seriesCode, bookCode)
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	document, err := parseSourceFile(filename, source)
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	if err := store.SetTranslationTargetStatus(seriesCode, bookCode, targetLanguage, library.StatusAnalyzing); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	key := dictionaryKey(seriesCode, bookCode, targetLanguage)
+	s.dictionaryRuns.set(key, translation.DictionaryProgress{Total: len(translation.ChunkNodes(document.TextNodes(), 0))})
+	ws, _ := s.session.Current()
+	go s.buildDictionary(context.Background(), store, ws.Config, series, book, targetLanguage, key)
+	s.bookDetail(w, r)
+}
+
+func (s screens) buildDictionary(ctx context.Context, store library.Store, config workspace.Config, series library.Series, book library.Book, targetLanguage, key string) {
+	defer s.dictionaryRuns.clear(key)
+	fail := func(err error) {
+		log.Printf("Dictionary Building for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
+		if statusErr := store.SetTranslationTargetStatus(series.Code, book.Code, targetLanguage, library.StatusFailed); statusErr != nil {
+			log.Printf("record Dictionary Building failure: %v", statusErr)
+		}
+	}
+	source, filename, err := store.SourceFile(series.Code, book.Code)
+	if err != nil {
+		fail(err)
+		return
+	}
+	document, err := parseSourceFile(filename, source)
+	if err != nil {
+		fail(err)
+		return
+	}
+	client, err := s.agents(config.Agent)
+	if err != nil {
+		fail(err)
+		return
+	}
+	terms, err := (translation.DictionaryBuilder{Agent: client, MechanicalModel: config.Models.Mechanical, OccurrenceThreshold: config.DictionaryOccurrenceThreshold}).Build(ctx, document.TextNodes(), series.SourceLanguage, targetLanguage, func(progress translation.DictionaryProgress) {
+		s.dictionaryRuns.set(key, progress)
+	})
+	if err != nil {
+		fail(err)
+		return
+	}
+	if err := store.WriteDictionary(series.Code, book.Code, targetLanguage, terms); err != nil {
+		fail(err)
+		return
+	}
+	if err := store.SetTranslationTargetStatus(series.Code, book.Code, targetLanguage, library.StatusDictionaryReady); err != nil {
+		log.Printf("record Dictionary Building completion: %v", err)
+	}
+}
+
+func parseSourceFile(filename string, source []byte) (format.Document, error) {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".txt":
+		return (txt.Handler{}).Parse(source)
+	case ".fb2":
+		return (fb2.Handler{}).Parse(source)
+	default:
+		return nil, fmt.Errorf("unsupported Source File %q", filename)
+	}
+}
+
+func (s screens) dictionaryProgress(w http.ResponseWriter, r *http.Request) {
+	s.bookDetail(w, r)
+}
+
 func (s screens) detail(w http.ResponseWriter, r *http.Request, problem string) {
 	store, ok := s.current()
 	if !ok {
@@ -253,23 +378,38 @@ func (s screens) detail(w http.ResponseWriter, r *http.Request, problem string) 
 		http.NotFound(w, r)
 		return
 	}
+	fragment(w, "book-detail", s.bookDetailData(series, book, problem))
+}
+
+type bookDetailData struct {
+	Series   library.Series
+	Book     library.Book
+	Allowed  []targetOption
+	Progress map[string]translation.DictionaryProgress
+	Problem  string
+}
+
+func (s screens) bookDetailData(series library.Series, book library.Book, problem string) bookDetailData {
 	ws, _ := s.session.Current()
 	allowed := make([]targetOption, 0, len(ws.Config.Languages))
-	existing := map[string]library.Status{}
+	existing := make(map[string]library.Status, len(book.Targets))
+	progress := make(map[string]translation.DictionaryProgress, len(book.Targets))
 	for _, target := range book.Targets {
 		existing[target.Language] = target.Status
+		if target.Status == library.StatusAnalyzing {
+			progress[target.Language] = s.dictionaryRuns.get(dictionaryKey(series.Code, book.Code, target.Language))
+		}
 	}
 	for _, tag := range ws.Config.Languages {
 		if language, ok := workspace.LanguageFor(tag); ok && tag != series.SourceLanguage {
 			allowed = append(allowed, targetOption{Language: language, Status: existing[tag]})
 		}
 	}
-	fragment(w, "book-detail", struct {
-		Series  library.Series
-		Book    library.Book
-		Allowed []targetOption
-		Problem string
-	}{series, book, allowed, problem})
+	return bookDetailData{Series: series, Book: book, Allowed: allowed, Progress: progress, Problem: problem}
+}
+
+func dictionaryKey(seriesCode, bookCode, targetLanguage string) string {
+	return seriesCode + "/" + bookCode + "/" + targetLanguage
 }
 
 // welcome is what a user with no workspace sees, and carries whatever the

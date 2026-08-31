@@ -104,9 +104,10 @@ func quotedTags(tags []string) string {
 // Config is the contents of workspace.toml: the defaults every Series and Book
 // in this workspace inherits.
 type Config struct {
-	Agent     string   `toml:"agent"`
-	Languages []string `toml:"languages"`
-	Models    Models   `toml:"models"`
+	Agent                         string   `toml:"agent"`
+	Languages                     []string `toml:"languages"`
+	DictionaryOccurrenceThreshold int      `toml:"dictionary_occurrence_threshold"`
+	Models                        Models   `toml:"models"`
 }
 
 // Workspace is an opened workspace root together with its Config.
@@ -161,6 +162,11 @@ func Open(root string) (Workspace, error) {
 	if err := validateTargetLanguages(config.Languages); err != nil {
 		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
 	}
+	if config.DictionaryOccurrenceThreshold <= 0 {
+		// Config files predate Dictionary Building. Treat an omitted value as
+		// today's default without rewriting a hand-maintained file.
+		config.DictionaryOccurrenceThreshold = 2
+	}
 	return Workspace{Root: root, Config: config}, nil
 }
 
@@ -180,6 +186,11 @@ agent = "claude"
 # The target languages offered when adding a Translation Target to a Book.
 # Use canonical ISO 639-1 tags, for example "uk" for Ukrainian.
 languages = []
+
+# A proposed Term must appear in at least this many Chunks before it reaches
+# Dictionary review. Raise it to shrink a noisy Dictionary; lower it to keep
+# less frequent recurring Terms.
+dictionary_occurrence_threshold = 2
 
 # Models are named in the Agent's own vocabulary — these are what the claude
 # CLI accepts for --model. A Book may override them.

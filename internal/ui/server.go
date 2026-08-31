@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ijackua/scriptorium/internal/agent"
 	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
@@ -46,7 +47,7 @@ func NewServer(session *workspace.Session) (*Server, error) {
 
 	s := &Server{
 		listener: listener,
-		handler:  requireLocalCaller(local, origins, routes(session)),
+		handler:  requireLocalCaller(local, origins, routes(session, agent.New)),
 	}
 	s.http = &http.Server{
 		Handler: s.handler,

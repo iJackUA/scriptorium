@@ -23,6 +23,13 @@ type TranslationTarget struct {
 	Status   Status
 }
 
+// Term is one original-to-translation mapping in a Dictionary.
+type Term struct {
+	Original    string
+	Translation string
+	Note        string
+}
+
 // Book is a single work belonging to exactly one Series. Its Book Code names
 // the folder it is stored under.
 type Book struct {

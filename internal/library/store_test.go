@@ -89,6 +89,35 @@ func TestCreatingATranslationTargetWritesNewState(t *testing.T) {
 	}
 }
 
+func TestDictionaryBuildingStateAndDictionaryArePersistedPerTranslationTarget(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	_, _ = s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+
+	if err := s.SetTranslationTargetStatus(series.Code, "solaris", "uk", StatusAnalyzing); err != nil {
+		t.Fatalf("SetTranslationTargetStatus(Analyzing): %v", err)
+	}
+	if err := s.WriteDictionary(series.Code, "solaris", "uk", []Term{{Original: "Solaris", Translation: "\u0421\u043e\u043b\u044f\u0440\u0456\u0441", Note: "title"}}); err != nil {
+		t.Fatalf("WriteDictionary: %v", err)
+	}
+	if err := s.SetTranslationTargetStatus(series.Code, "solaris", "uk", StatusDictionaryReady); err != nil {
+		t.Fatalf("SetTranslationTargetStatus(Dictionary Ready): %v", err)
+	}
+
+	path := filepath.Join(s.root, series.Code, BooksDir, "solaris", TranslationsDir, "pl-to-uk", DictionaryFile)
+	if got, want := read(t, path), "original\ttranslation\tnote\nSolaris\t\u0421\u043e\u043b\u044f\u0440\u0456\u0441\ttitle\n"; got != want {
+		t.Errorf("dictionary.tsv = %q, want %q", got, want)
+	}
+	lib, err := s.Library()
+	if err != nil {
+		t.Fatalf("Library: %v", err)
+	}
+	if got := lib.Series[0].Books[0].Targets[0].Status; got != StatusDictionaryReady {
+		t.Errorf("Status = %q, want %q", got, StatusDictionaryReady)
+	}
+}
+
 func TestUploadingASourceFileStoresItsOriginalBytes(t *testing.T) {
 	s := store(t)
 	series, _ := s.CreateSeries("Solaris", "pl")

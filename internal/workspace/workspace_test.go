@@ -25,6 +25,9 @@ func TestOpenCreatesAConfigWithDefaults(t *testing.T) {
 	if ws.Config.Models.Mechanical == "" || ws.Config.Models.Translation == "" {
 		t.Errorf("both Models want a default, got %+v", ws.Config.Models)
 	}
+	if ws.Config.DictionaryOccurrenceThreshold != 2 {
+		t.Errorf("DictionaryOccurrenceThreshold = %d, want 2", ws.Config.DictionaryOccurrenceThreshold)
+	}
 	if len(ws.Config.Languages) != 0 {
 		t.Errorf("Languages = %v, want an empty allowlist", ws.Config.Languages)
 	}
@@ -72,6 +75,23 @@ func TestOpeningAnExistingWorkspacePreservesItByteForByte(t *testing.T) {
 	}
 	if ws.Config.Models.Translation != "good" {
 		t.Errorf("Models.Translation = %q, want %q", ws.Config.Models.Translation, "good")
+	}
+}
+
+func TestDictionaryOccurrenceThresholdCanBeConfigured(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ConfigFile)
+	config := "agent = \"claude\"\nlanguages = []\ndictionary_occurrence_threshold = 5\n[models]\nmechanical = \"cheap\"\ntranslation = \"good\"\n"
+	if err := os.WriteFile(path, []byte(config), 0o644); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	ws, err := Open(root)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := ws.Config.DictionaryOccurrenceThreshold; got != 5 {
+		t.Errorf("DictionaryOccurrenceThreshold = %d, want 5", got)
 	}
 }
 

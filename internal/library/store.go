@@ -28,6 +28,8 @@ const (
 	TranslationsDir = "translations"
 	// StateFile holds a Translation Target's machine Status.
 	StateFile = "state.json"
+	// DictionaryFile holds the proposed Dictionary for one Translation Target.
+	DictionaryFile = "dictionary.tsv"
 	// SourceFilePrefix is the filename before a Source File's extension.
 	SourceFilePrefix = "source"
 )
@@ -353,6 +355,102 @@ func (s Store) UploadSourceFile(seriesCode, bookCode, filename string, source io
 	}
 	if err := os.Rename(temporaryName, filepath.Join(bookDir, SourceFilePrefix+extension)); err != nil {
 		return fmt.Errorf("store Source File: %w", err)
+	}
+	return nil
+}
+
+// SourceFile reads a Book's Source File and returns its on-disk name. A Book
+// without one cannot begin Dictionary Building or translation.
+func (s Store) SourceFile(seriesCode, bookCode string) ([]byte, string, error) {
+	if _, _, ok := s.book(seriesCode, bookCode); !ok {
+		return nil, "", fmt.Errorf("Book %q is not in Series %q", bookCode, seriesCode)
+	}
+	bookDir := filepath.Join(s.root, seriesCode, BooksDir, bookCode)
+	name, err := sourceFile(bookDir)
+	if err != nil {
+		return nil, "", err
+	}
+	if name == "" {
+		return nil, "", errors.New("upload a Source File before starting Dictionary Building")
+	}
+	body, err := os.ReadFile(filepath.Join(bookDir, name))
+	if err != nil {
+		return nil, "", fmt.Errorf("read Source File: %w", err)
+	}
+	return body, name, nil
+}
+
+// SetTranslationTargetStatus changes the persisted Status for one existing
+// Translation Target. The temporary file keeps readers from observing a
+// partially-written state while a long-running operation is in flight.
+func (s Store) SetTranslationTargetStatus(seriesCode, bookCode, targetLanguage string, status Status) error {
+	series, err := s.series(seriesCode)
+	if err != nil {
+		return err
+	}
+	if _, _, ok := (Library{Series: []Series{series}}).Book(seriesCode, bookCode); !ok {
+		return fmt.Errorf("Book %q is not in Series %q", bookCode, seriesCode)
+	}
+	if _, ok := statusFor(strings.ToLower(strings.ReplaceAll(string(status), " ", "_"))); !ok {
+		return fmt.Errorf("unknown Status %q", status)
+	}
+	path := filepath.Join(s.root, seriesCode, BooksDir, bookCode, TranslationsDir, languagePair(series.SourceLanguage, targetLanguage), StateFile)
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("Translation Target %q does not exist", targetLanguage)
+		}
+		return fmt.Errorf("read %s: %w", StateFile, err)
+	}
+	body, err := json.Marshal(struct {
+		Status string `json:"status"`
+	}{Status: strings.ToLower(strings.ReplaceAll(string(status), " ", "_"))})
+	if err != nil {
+		return fmt.Errorf("encode %s: %w", StateFile, err)
+	}
+	return writeAtomic(path, body)
+}
+
+// WriteDictionary writes a proposed Dictionary in the plain TSV format users
+// can inspect and edit before translation begins.
+func (s Store) WriteDictionary(seriesCode, bookCode, targetLanguage string, terms []Term) error {
+	series, err := s.series(seriesCode)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(s.root, seriesCode, BooksDir, bookCode, TranslationsDir, languagePair(series.SourceLanguage, targetLanguage), DictionaryFile)
+	if _, err := os.Stat(filepath.Dir(path)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("Translation Target %q does not exist", targetLanguage)
+		}
+		return fmt.Errorf("read Translation Target: %w", err)
+	}
+	var body strings.Builder
+	body.WriteString("original\ttranslation\tnote\n")
+	for _, term := range terms {
+		if strings.ContainsAny(term.Original+term.Translation+term.Note, "\t\n\r") {
+			return errors.New("Dictionary Terms cannot contain tabs or line breaks")
+		}
+		fmt.Fprintf(&body, "%s\t%s\t%s\n", term.Original, term.Translation, term.Note)
+	}
+	return writeAtomic(path, []byte(body.String()))
+}
+
+func writeAtomic(path string, body []byte) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".temporary-*")
+	if err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
+	}
+	name := temporary.Name()
+	defer os.Remove(name)
+	if _, err := temporary.Write(body); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
+	}
+	if err := os.Rename(name, path); err != nil {
+		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 	return nil
 }
