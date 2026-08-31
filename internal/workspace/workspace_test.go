@@ -164,6 +164,21 @@ func TestOpenReportsAnUnreadableConfig(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsAnUnknownAgent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ConfigFile), []byte("agent = \"codex\"\n"), 0o644); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+
+	_, err := Open(root)
+	if err == nil {
+		t.Fatal("Open accepted an unknown Agent")
+	}
+	if !strings.Contains(err.Error(), "codex") {
+		t.Errorf("error = %v, want the configured Agent named", err)
+	}
+}
+
 func read(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)

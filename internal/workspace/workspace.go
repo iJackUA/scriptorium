@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/ijackua/scriptorium/internal/agent"
 )
 
 // ConfigFile is the name of the settings file at the workspace root.
@@ -152,6 +153,9 @@ func Open(root string) (Workspace, error) {
 	// workspace and an opened one cannot disagree about the defaults.
 	var config Config
 	if _, err := toml.DecodeFile(path, &config); err != nil {
+		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
+	}
+	if err := agent.ValidateName(config.Agent); err != nil {
 		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
 	}
 	if err := validateTargetLanguages(config.Languages); err != nil {
