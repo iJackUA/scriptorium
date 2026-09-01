@@ -50,9 +50,8 @@ Use this exact form and return no headings, Markdown, commentary, or other text:
 [[/NODE]]`
 
 type continuityWindow struct {
-	source      format.TextNode
-	translation format.TextNode
-	present     bool
+	source       []format.TextNode
+	translations []format.TextNode
 }
 
 func translationPrompt(sourceLanguage, targetLanguage string, dictionary []library.Term, continuity continuityWindow, nodes []format.TextNode) string {
@@ -79,8 +78,8 @@ func formatDictionary(terms []library.Term) string {
 }
 
 func formatContinuityWindow(window continuityWindow) string {
-	if !window.present {
+	if len(window.source) == 0 {
 		return "(empty — start of Chapter)"
 	}
-	return fmt.Sprintf("Previous source tail:\n%s\n\nIts accepted translation:\n%s", SerializeNodes([]format.TextNode{window.source}), SerializeNodes([]format.TextNode{window.translation}))
+	return fmt.Sprintf("Previous source Chunk:\n%s\n\nIts accepted translation:\n%s", SerializeNodes(window.source), SerializeNodes(window.translations))
 }

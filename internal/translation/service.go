@@ -62,20 +62,34 @@ type manifestChunk struct {
 }
 
 type translationState struct {
-	Status                string       `json:"status"`
-	SourceFile            string       `json:"source_file"`
-	SourceFingerprint     string       `json:"source_fingerprint"`
-	DictionaryFingerprint string       `json:"dictionary_fingerprint"`
-	Chunks                []chunkState `json:"chunks"`
+	Status                targetStateStatus `json:"status"`
+	SourceFile            string            `json:"source_file"`
+	SourceFingerprint     string            `json:"source_fingerprint"`
+	DictionaryFingerprint string            `json:"dictionary_fingerprint"`
+	Chunks                []chunkState      `json:"chunks"`
 }
 
 type chunkState struct {
-	Index      int     `json:"index"`
-	Status     string  `json:"status"`
-	SourceHash string  `json:"source_hash"`
-	Cost       float64 `json:"cost"`
-	Attempts   int     `json:"attempts"`
+	Index      int         `json:"index"`
+	Status     chunkStatus `json:"status"`
+	SourceHash string      `json:"source_hash"`
+	Cost       float64     `json:"cost"`
+	Attempts   int         `json:"attempts"`
 }
+
+type targetStateStatus string
+
+const (
+	targetStateTranslating targetStateStatus = "translating"
+	targetStateTranslated  targetStateStatus = "translated"
+)
+
+type chunkStatus string
+
+const (
+	chunkPending   chunkStatus = "pending"
+	chunkCompleted chunkStatus = "completed"
+)
 
 // Translate materializes, translates, persists, and composes one Translation
 // Target. It returns the final output path.
@@ -115,7 +129,7 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 	if err != nil {
 		return "", err
 	}
-	state.Status = statusValue(library.StatusTranslating)
+	state.Status = targetStateTranslating
 	statePath := filepath.Join(targetDirectory, library.StateFile)
 	if err := writeJSONAtomic(statePath, state); err != nil {
 		return "", err
@@ -150,14 +164,16 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 		if err := writeAtomic(translatedPath, []byte(SerializeNodes(translated))); err != nil {
 			return "", err
 		}
-		state.Chunks[index].Status = "completed"
+		state.Chunks[index].Status = chunkCompleted
 		state.Chunks[index].Cost = response.Cost
 		state.Chunks[index].Attempts = 1
 		if err := writeJSONAtomic(statePath, state); err != nil {
 			return "", err
 		}
-		last := len(chunk.Nodes) - 1
-		continuity = continuityWindow{source: chunk.Nodes[last], translation: translated[last], present: true}
+		continuity = continuityWindow{
+			source:       append([]format.TextNode(nil), chunk.Nodes...),
+			translations: append([]format.TextNode(nil), translated...),
+		}
 	}
 
 	output, err := composeFromPersisted(document, targetDirectory, chunks)
@@ -169,7 +185,7 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 	if err := writeAtomic(outputPath, output); err != nil {
 		return "", err
 	}
-	state.Status = statusValue(library.StatusTranslated)
+	state.Status = targetStateTranslated
 	if err := writeJSONAtomic(statePath, state); err != nil {
 		return "", err
 	}
@@ -252,7 +268,7 @@ func newTranslationState(sourceName string, source []byte, dictionary []library.
 		SourceFile: sourceName, SourceFingerprint: fingerprint(source), DictionaryFingerprint: fingerprint(dictionaryBody),
 	}
 	for _, chunk := range chunks {
-		state.Chunks = append(state.Chunks, chunkState{Index: chunk.Index, Status: "pending", SourceHash: chunk.SourceHash})
+		state.Chunks = append(state.Chunks, chunkState{Index: chunk.Index, Status: chunkPending, SourceHash: chunk.SourceHash})
 	}
 	return state, nil
 }
@@ -320,8 +336,4 @@ func languagePair(source, target string) string { return source + "-to-" + targe
 
 func languageLabel(language workspace.Language) string {
 	return language.Name + " (" + language.Tag + ")"
-}
-
-func statusValue(status library.Status) string {
-	return strings.ToLower(strings.ReplaceAll(string(status), " ", "_"))
 }
