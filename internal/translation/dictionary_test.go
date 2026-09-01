@@ -14,7 +14,7 @@ func TestDictionaryBuildingExtractsRecurringTermsThenTranslatesThemTogether(t *t
 	fake := agent.NewFake(
 		agent.Response{Result: "Holmes\nWatson\nLondon"},
 		agent.Response{Result: "Holmes\nLondon\nBaker Street"},
-		agent.Response{Result: "Holmes\t\u0413\u043e\u043b\u043c\u0441\t\nLondon\t\u041b\u043e\u043d\u0434\u043e\u043d\t"},
+		agent.Response{Result: "Here is the Dictionary:\n\n```tsv\noriginal\ttranslation\tnote\nHolmes\t\u0413\u043e\u043b\u043c\u0441\t\nLondon\t\u041b\u043e\u043d\u0434\u043e\u043d\t\n```\n\nDone."},
 	)
 	progress := []DictionaryProgress{}
 
@@ -62,5 +62,8 @@ func TestDictionaryBuildingExtractsRecurringTermsThenTranslatesThemTogether(t *t
 		if !strings.Contains(requests[2].Prompt, term) {
 			t.Errorf("term translation prompt lacks %q:\n%s", term, requests[2].Prompt)
 		}
+	}
+	if !strings.Contains(requests[2].Prompt, "Do not add Markdown, headings, labels, or commentary") {
+		t.Errorf("term translation prompt does not prohibit formatting:\n%s", requests[2].Prompt)
 	}
 }

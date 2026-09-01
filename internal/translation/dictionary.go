@@ -113,20 +113,29 @@ func termsFromExtraction(result string) map[string]struct{} {
 }
 
 func termTranslationPrompt(terms []string, sourceLanguage, targetLanguage string) string {
-	return fmt.Sprintf("Render this complete Dictionary Term set coherently from %s to %s. Return exactly one TSV row per supplied Term: original, translation, note. Leave note blank when unnecessary.\n\n%s", sourceLanguage, targetLanguage, strings.Join(terms, "\n"))
+	return fmt.Sprintf("Render this complete Dictionary Term set coherently from %s to %s. Output only raw TSV: exactly one row per supplied Term, with original, translation, note columns; leave note blank when unnecessary. Do not add Markdown, headings, labels, or commentary.\n\n%s", sourceLanguage, targetLanguage, strings.Join(terms, "\n"))
 }
 
 func translatedTerms(result string, expected []string) ([]Term, error) {
+	expectedOriginals := make(map[string]struct{}, len(expected))
+	for _, original := range expected {
+		expectedOriginals[original] = struct{}{}
+	}
 	translations := make(map[string]Term, len(expected))
-	for lineNumber, line := range strings.Split(strings.TrimSpace(result), "\n") {
+	for lineNumber, line := range strings.Split(result, "\n") {
+		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		fields := strings.Split(line, "\t")
+		original := strings.TrimSpace(fields[0])
+		if _, wanted := expectedOriginals[original]; !wanted {
+			continue
+		}
 		if len(fields) < 2 || len(fields) > 3 {
 			return nil, fmt.Errorf("read translated Dictionary Terms: line %d is not TSV original, translation, note", lineNumber+1)
 		}
-		original, translation := strings.TrimSpace(fields[0]), strings.TrimSpace(fields[1])
+		translation := strings.TrimSpace(fields[1])
 		if original == "" || translation == "" {
 			return nil, fmt.Errorf("read translated Dictionary Terms: line %d has an empty original or translation", lineNumber+1)
 		}

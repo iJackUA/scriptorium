@@ -15,7 +15,7 @@
   </div>
   <main id="app" class="p-6">{{.}}</main>
   <script>
-    function languageControls(root) { root.querySelectorAll('select.language-select').forEach(function (select) { if (!select.tomselect) new TomSelect(select, {create: false, searchField: ['text', 'value']}); }); }
+    function languageControls(root) { root.querySelectorAll('select.language-select').forEach(function (select) { if (!select.tomselect) new TomSelect(select, {create: false, searchField: ['text', 'value'], dropdownParent: 'body'}); }); }
     document.addEventListener('DOMContentLoaded', function () { languageControls(document); });
     document.body.addEventListener('htmx:afterSwap', function (event) { languageControls(event.target); });
     function syncBookSource() { var series = document.querySelector('select[name="series"]'), source = document.querySelector('#book-source-language'); if (series && source) source.disabled = series.value !== ''; }

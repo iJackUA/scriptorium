@@ -12,22 +12,22 @@ From a Book's details page, pick an allowed Target Language to create a Translat
 
 **Status:** ready-for-agent
 
-- [ ] The application bundles the ISO 639-1 base-language catalog and resolves each canonical tag to its English display name
-- [ ] `workspace.toml` starts with an empty, ordered target-language allowlist of canonical tags
+- [x] The application bundles the ISO 639-1 base-language catalog and resolves each canonical tag to its English display name
+- [x] `workspace.toml` starts with an empty, ordered target-language allowlist of canonical tags
 - [ ] Workspace settings are reachable from the library and the empty-allowlist prompt; they add catalog languages through a searchable picker and remove them individually
-- [ ] Removing an in-use allowed language preserves its existing Translation Targets and warns that it prevents only future creation
-- [ ] New Series and standalone-Book creation use the searchable full-catalog Source Language picker; adding a Book to an existing Series submits no source-language value
-- [ ] Source Language is stored as an immutable canonical tag in `series.toml`; legacy name-based language values and unknown tags are rejected without migration or rewriting
-- [ ] Tom Select is bundled locally, configured with `create: false`, and used with DaisyUI-styled searchable Language controls that search names and tags
-- [ ] Target languages offered on Book details come from the Workspace allowlist; the Source Language is excluded and existing targets are disabled with their Status
-- [ ] Creating a Translation Target creates `books/<book-code>/translations/<source>-to-<target>/`
-- [ ] Creation atomically writes `state.json` with `{ "status": "new" }`; later UI labels map machine status values to canonical Status names
-- [ ] A Book can hold several Translation Targets, each with its own Status, starting at `New`
-- [ ] The Book details page shows each Translation Target with its human-readable language name, canonical tag, and Status
-- [ ] Deleting a Translation Target requires a DaisyUI confirmation modal and removes only that pair's directory; the Book, its Source File, and its other Translation Targets are untouched
-- [ ] A duplicate target, an equal source and target language, or any pre-existing pair directory is rejected without modifying files
-- [ ] A malformed or unknown `state.json` status is reported as a target-specific read error, is never treated as `New`, and blocks actions on that target
-- [ ] A deletion failure leaves the target shown and reports the error; the details view reloads only after successful deletion
+- [x] Removing an in-use allowed language preserves its existing Translation Targets and warns that it prevents only future creation
+- [x] New Series and standalone-Book creation use the searchable full-catalog Source Language picker; adding a Book to an existing Series submits no source-language value
+- [x] Source Language is stored as an immutable canonical tag in `series.toml`; legacy name-based language values and unknown tags are rejected without migration or rewriting
+- [x] Tom Select is bundled locally, configured with `create: false`, and used with DaisyUI-styled searchable Language controls that search names and tags
+- [x] Target languages offered on Book details come from the Workspace allowlist; the Source Language is excluded and existing targets are disabled with their Status
+- [x] Creating a Translation Target creates `books/<book-code>/translations/<source>-to-<target>/`
+- [x] Creation atomically writes `state.json` with `{ "status": "new" }`; later UI labels map machine status values to canonical Status names
+- [x] A Book can hold several Translation Targets, each with its own Status, starting at `New`
+- [x] The Book details page shows each Translation Target with its human-readable language name, canonical tag, and Status
+- [x] Deleting a Translation Target requires a DaisyUI confirmation modal and removes only that pair's directory; the Book, its Source File, and its other Translation Targets are untouched
+- [x] A duplicate target, an equal source and target language, or any pre-existing pair directory is rejected without modifying files
+- [x] A malformed or unknown `state.json` status is reported as a target-specific read error, is never treated as `New`, and blocks actions on that target
+- [x] A deletion failure leaves the target shown and reports the error; the details view reloads only after successful deletion
 
 ## Comments
 
@@ -40,3 +40,21 @@ From a Book's details page, pick an allowed Target Language to create a Translat
 **A Language Pair names every target-scoped path.** The directory and future Series Dictionary use `<source>-to-<target>`, for example `en-to-uk`. This is readable and unambiguous even though BCP 47 tags normally contain hyphens; v1's catalog restricts the tags to lowercase ISO 639-1 codes.
 
 **Target creation is durable before later pipeline work begins.** The pair directory is the target's identity and `state.json` records its initial machine Status. Existing or malformed target data is never overwritten or silently repaired.
+
+### Verification — 2026-08-28
+
+The initial Tom Select controls really were unusable: their option DOM was
+created and marked open, but DaisyUI's `details` collapse boundary clipped the
+dropdown beneath the following form fields. Configuring every language control
+with Tom Select's `dropdownParent: "body"` puts the menu above that boundary.
+
+Verified through `make headless` and `agent-browser`: the Source Language
+catalog is visible on initial render, and Target Languages searches for
+`Ukrainian`, exposes `Ukrainian (uk)`, and selects `uk` in both Tom Select and
+the underlying `<select>`. `make check` passes.
+
+### Implementation status
+
+The persisted-language, Source Language, Tom Select, and Translation Target
+lifecycle items above are implemented and covered by `make check`. Settings
+navigation from the empty-allowlist prompt remains open.

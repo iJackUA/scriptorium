@@ -432,7 +432,41 @@ func parseSourceFile(filename string, source []byte) (format.Document, error) {
 }
 
 func (s screens) dictionaryProgress(w http.ResponseWriter, r *http.Request) {
-	s.bookDetail(w, r)
+	store, ok := s.current()
+	if !ok {
+		s.reply(w, r, form{})
+		return
+	}
+	seriesCode, bookCode, targetLanguage := r.PathValue("series"), r.PathValue("book"), r.PathValue("target")
+	lib, err := store.Library()
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	series, book, found := lib.Book(seriesCode, bookCode)
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	for _, target := range book.Targets {
+		if target.Language != targetLanguage {
+			continue
+		}
+		if target.Status != library.StatusAnalyzing {
+			w.Header().Set("HX-Retarget", "#book-detail")
+			w.Header().Set("HX-Reswap", "innerHTML")
+			s.bookDetail(w, r)
+			return
+		}
+		fragment(w, "dictionary-progress", dictionaryProgressData{
+			SeriesCode: series.Code,
+			BookCode:   book.Code,
+			Language:   target.Language,
+			Progress:   s.dictionaryRuns.get(dictionaryKey(series.Code, book.Code, target.Language)),
+		})
+		return
+	}
+	http.NotFound(w, r)
 }
 
 func (s screens) detail(w http.ResponseWriter, r *http.Request, problem string) {
@@ -460,6 +494,13 @@ type bookDetailData struct {
 	Allowed  []targetOption
 	Progress map[string]translation.DictionaryProgress
 	Problem  string
+}
+
+type dictionaryProgressData struct {
+	SeriesCode string
+	BookCode   string
+	Language   string
+	Progress   translation.DictionaryProgress
 }
 
 func (s screens) bookDetailData(series library.Series, book library.Book, problem string) bookDetailData {

@@ -303,10 +303,95 @@ func TestDictionaryBuildingShowsTheActiveChunkAndRefreshesIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("render Dictionary progress: %v", err)
 	}
-	for _, want := range []string{"Analyzing Chunk 4/20 (3 complete)", `hx-trigger="load delay:1s, every 1s"`} {
+	for _, want := range []string{"Analyzing Chunk 4/20 (3 complete)", `hx-trigger="every 1s"`, `hx-swap="outerHTML"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Dictionary progress does not render %q:\n%s", want, body)
 		}
+	}
+}
+
+func TestDictionaryProgressRefreshesOnlyItsOwnRegionUntilTheRunFinishes(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Holmes", "en")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "adventures"})
+	if _, err := store.CreateTranslationTarget(series.Code, "adventures", "uk", []string{"uk"}); err != nil {
+		t.Fatalf("CreateTranslationTarget: %v", err)
+	}
+	if err := store.SetTranslationTargetStatus(series.Code, "adventures", "uk", library.StatusAnalyzing); err != nil {
+		t.Fatalf("SetTranslationTargetStatus: %v", err)
+	}
+	runs := newDictionaryRuns()
+	_, runID := runs.start(dictionaryKey(series.Code, "adventures", "uk"), translation.DictionaryProgress{Active: 1, Total: 3})
+	runs.set(dictionaryKey(series.Code, "adventures", "uk"), runID, translation.DictionaryProgress{Completed: 1, Active: 2, Total: 3})
+	s := screens{session: sessionFor(t, root), dictionaryRuns: runs}
+	req := httptest.NewRequest(http.MethodGet, "/series/holmes/books/adventures/targets/uk/dictionary-progress", nil)
+	req.SetPathValue("series", "holmes")
+	req.SetPathValue("book", "adventures")
+	req.SetPathValue("target", "uk")
+	rec := httptest.NewRecorder()
+	s.dictionaryProgress(rec, req)
+
+	body := rec.Body.String()
+	if !strings.HasPrefix(body, "<span") || !strings.Contains(body, "Analyzing Chunk 2/3 (1 complete)") {
+		t.Fatalf("progress refresh = %s, want only the updated progress region", body)
+	}
+
+	if err := store.SetTranslationTargetStatus(series.Code, "adventures", "uk", library.StatusDictionaryReady); err != nil {
+		t.Fatalf("SetTranslationTargetStatus(Dictionary Ready): %v", err)
+	}
+	terminal := httptest.NewRecorder()
+	s.dictionaryProgress(terminal, req)
+	if got := terminal.Header().Get("HX-Retarget"); got != "#book-detail" {
+		t.Errorf("HX-Retarget = %q, want #book-detail", got)
+	}
+	if !strings.Contains(terminal.Body.String(), "Dictionary Ready") {
+		t.Errorf("terminal refresh does not render Dictionary Ready: %s", terminal.Body.String())
+	}
+}
+
+func TestDictionaryBuildingWritesAFencedAgentReplyAndReachesDictionaryReady(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Holmes", "en")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "adventures"})
+	source := strings.Repeat("word ", translation.DefaultWordBudget) + "Holmes\n\n" + strings.Repeat("word ", translation.DefaultWordBudget) + "Holmes"
+	if err := store.UploadSourceFile(series.Code, "adventures", "adventures.txt", strings.NewReader(source), false); err != nil {
+		t.Fatalf("UploadSourceFile: %v", err)
+	}
+	if _, err := store.CreateTranslationTarget(series.Code, "adventures", "uk", []string{"uk"}); err != nil {
+		t.Fatalf("CreateTranslationTarget: %v", err)
+	}
+	fake := agent.NewFake(
+		agent.Response{Result: "Holmes"},
+		agent.Response{Result: "Holmes"},
+		agent.Response{Result: "# English to Ukrainian Dictionary\n\noriginal\ttranslation\tnote\nHolmes\t\u0413\u043e\u043b\u043c\u0441\t"},
+	)
+	s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return fake, nil })
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	path := "/series/holmes/books/adventures/targets/uk/dictionary"
+	postForm(s, path, url.Values{})
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		lib, err := store.Library()
+		if err != nil {
+			t.Fatalf("Library: %v", err)
+		}
+		if lib.Series[0].Books[0].Targets[0].Status == library.StatusDictionaryReady {
+			break
+		}
+	}
+
+	body := serve(s, request(s, "/series/holmes/books/adventures")).Body.String()
+	if !strings.Contains(body, "Dictionary Ready") {
+		t.Fatalf("Dictionary Building did not reach its terminal UI state: %s", body)
+	}
+	pathOnDisk := filepath.Join(root, "holmes", "books", "adventures", "translations", "en-to-uk", library.DictionaryFile)
+	if got := read(t, pathOnDisk); !strings.Contains(got, "Holmes\t\u0413\u043e\u043b\u043c\u0441") {
+		t.Errorf("dictionary.tsv = %q, want fenced agent reply to be persisted", got)
 	}
 }
 
