@@ -165,6 +165,38 @@ func TestDictionaryReadsHandEditsAndReportsMalformedLineNumbers(t *testing.T) {
 	}
 }
 
+func TestUpdatingBookDictionaryTSVValidatesBeforeReplacing(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	_, _ = s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	if err := s.WriteDictionary(series.Code, "solaris", "uk", []Term{{Original: "Ocean", Translation: "Океан"}}); err != nil {
+		t.Fatalf("WriteDictionary: %v", err)
+	}
+
+	if err := s.UpdateBookDictionaryTSV(series.Code, "solaris", "uk", []byte("original\ttranslation\tnote\nOcean\tморе\tmanual\n")); err != nil {
+		t.Fatalf("UpdateBookDictionaryTSV: %v", err)
+	}
+	got, err := s.BookDictionary(series.Code, "solaris", "uk")
+	if err != nil {
+		t.Fatalf("BookDictionary: %v", err)
+	}
+	if want := []Term{{Original: "Ocean", Translation: "море", Note: "manual"}}; !slices.Equal(got, want) {
+		t.Errorf("BookDictionary = %#v, want %#v", got, want)
+	}
+
+	if err := s.UpdateBookDictionaryTSV(series.Code, "solaris", "uk", []byte("original\ttranslation\tnote\nOcean\n")); err == nil || !strings.Contains(err.Error(), "line 2") {
+		t.Fatalf("invalid update error = %v, want a line 2 error", err)
+	}
+	got, err = s.BookDictionary(series.Code, "solaris", "uk")
+	if err != nil {
+		t.Fatalf("BookDictionary after rejected update: %v", err)
+	}
+	if want := []Term{{Original: "Ocean", Translation: "море", Note: "manual"}}; !slices.Equal(got, want) {
+		t.Errorf("rejected update changed BookDictionary to %#v, want %#v", got, want)
+	}
+}
+
 func TestPromotingABookTermMakesItAvailableToLaterBooks(t *testing.T) {
 	s := store(t)
 	series, _ := s.CreateSeries("Solaris", "pl")

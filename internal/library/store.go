@@ -445,6 +445,21 @@ func (s Store) BookDictionaryTSV(seriesCode, bookCode, targetLanguage string) ([
 	return dictionaryTSV(path)
 }
 
+// UpdateBookDictionaryTSV validates and replaces a Book Dictionary from its
+// hand-editable TSV representation. The replacement is atomic, so a rejected
+// edit cannot leave a partially written Dictionary behind.
+func (s Store) UpdateBookDictionaryTSV(seriesCode, bookCode, targetLanguage string, body []byte) error {
+	path, err := s.checkedBookDictionaryPath(seriesCode, bookCode, targetLanguage)
+	if err != nil {
+		return err
+	}
+	terms, err := parseDictionary(body)
+	if err != nil {
+		return err
+	}
+	return writeDictionary(path, terms)
+}
+
 // SeriesDictionary reads the Dictionary shared by a Series for one Language Pair.
 func (s Store) SeriesDictionary(seriesCode, targetLanguage string) ([]Term, error) {
 	series, err := s.series(seriesCode)
@@ -559,6 +574,10 @@ func readDictionary(path string) ([]Term, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read Dictionary: %w", err)
 	}
+	return parseDictionary(body)
+}
+
+func parseDictionary(body []byte) ([]Term, error) {
 	var terms []Term
 	for lineNumber, line := range strings.Split(strings.ReplaceAll(string(body), "\r\n", "\n"), "\n") {
 		if line == "" {

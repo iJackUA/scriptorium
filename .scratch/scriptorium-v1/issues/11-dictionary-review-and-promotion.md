@@ -24,3 +24,5 @@ TSV is deliberate: Dictionaries are hand-edited *and* machine-generated, and a l
 ## Comments
 
 2026-09-01: Verified with focused library and UI handler tests, plus `make check`. The UI test covers the TSV endpoints, promotion control, and 101-Term warning. `make headless` exited before exposing its loopback URL in this environment, so browser-level verification could not run; the handler tests exercised the same routes directly.
+
+2026-09-01: Added in-modal Book Dictionary editing. `Edit Dictionary` swaps the read-only review for a raw TSV editor; `Save` validates and atomically rewrites the TSV, while invalid input remains in edit mode with its line error and `Cancel` returns to the persisted review. Promote and Unpromote now target the modal content region, so the open dialog is preserved. `GOCACHE=/tmp/scriptorium-gocache make check` passed. The headless twin served its root HTML after elevated loopback permission was granted; the in-app browser backend was unavailable, so no browser screenshot was captured.

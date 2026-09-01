@@ -86,6 +86,9 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/stop", s.stopDictionaryBuilding)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary.tsv", s.bookDictionaryTSV)
 	mux.HandleFunc("GET /series/{series}/dictionaries/{target}", s.seriesDictionaryTSV)
+	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary/review", s.dictionaryReview)
+	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary/edit", s.editDictionary)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/edit", s.saveDictionary)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/promote", s.promoteDictionaryTerm)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/unpromote", s.unpromoteDictionaryTerm)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary-progress", s.dictionaryProgress)
@@ -415,7 +418,7 @@ func (s screens) promoteDictionaryTerm(w http.ResponseWriter, r *http.Request) {
 		s.detail(w, r, err.Error())
 		return
 	}
-	s.bookDetail(w, r)
+	s.dictionaryReview(w, r)
 }
 
 func (s screens) unpromoteDictionaryTerm(w http.ResponseWriter, r *http.Request) {
@@ -427,7 +430,74 @@ func (s screens) unpromoteDictionaryTerm(w http.ResponseWriter, r *http.Request)
 		s.detail(w, r, err.Error())
 		return
 	}
-	s.bookDetail(w, r)
+	s.dictionaryReview(w, r)
+}
+
+func (s screens) dictionaryReview(w http.ResponseWriter, r *http.Request) {
+	review, ok := s.loadDictionaryReview(w, r)
+	if !ok {
+		return
+	}
+	fragment(w, "dictionary-review-content", review)
+}
+
+func (s screens) editDictionary(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	seriesCode, bookCode, targetLanguage := r.PathValue("series"), r.PathValue("book"), r.PathValue("target")
+	body, err := store.BookDictionaryTSV(seriesCode, bookCode, targetLanguage)
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	fragment(w, "dictionary-editor", dictionaryEditorData{
+		SeriesCode: seriesCode,
+		BookCode:   bookCode,
+		Language:   targetLanguage,
+		TSV:        string(body),
+	})
+}
+
+func (s screens) saveDictionary(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	seriesCode, bookCode, targetLanguage := r.PathValue("series"), r.PathValue("book"), r.PathValue("target")
+	tsv := r.FormValue("tsv")
+	if err := store.UpdateBookDictionaryTSV(seriesCode, bookCode, targetLanguage, []byte(tsv)); err != nil {
+		fragment(w, "dictionary-editor", dictionaryEditorData{
+			SeriesCode: seriesCode,
+			BookCode:   bookCode,
+			Language:   targetLanguage,
+			TSV:        tsv,
+			Problem:    err.Error(),
+		})
+		return
+	}
+	s.dictionaryReview(w, r)
+}
+
+func (s screens) loadDictionaryReview(w http.ResponseWriter, r *http.Request) (dictionaryReview, bool) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return dictionaryReview{}, false
+	}
+	lib, err := store.Library()
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return dictionaryReview{}, false
+	}
+	series, book, found := lib.Book(r.PathValue("series"), r.PathValue("book"))
+	if !found {
+		http.NotFound(w, r)
+		return dictionaryReview{}, false
+	}
+	targetLanguage := r.PathValue("target")
+	review := s.reviewDictionary(store, series, book, targetLanguage)
+	return review, true
 }
 
 func (s screens) buildDictionary(ctx context.Context, store library.Store, workspaceRoot string, config workspace.Config, series library.Series, book library.Book, targetLanguage, key string, runID uint64) {
@@ -559,14 +629,25 @@ type bookDetailData struct {
 }
 
 type dictionaryReview struct {
-	Terms   []dictionaryReviewTerm
-	Warning bool
-	Problem string
+	SeriesCode string
+	BookCode   string
+	Language   string
+	Terms      []dictionaryReviewTerm
+	Warning    bool
+	Problem    string
 }
 
 type dictionaryReviewTerm struct {
 	library.Term
 	Promoted bool
+}
+
+type dictionaryEditorData struct {
+	SeriesCode string
+	BookCode   string
+	Language   string
+	TSV        string
+	Problem    string
 }
 
 type dictionaryProgressData struct {
@@ -587,31 +668,7 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 		if target.Status != library.StatusNew && target.Status != library.StatusAnalyzing {
 			store, ok := s.current()
 			if ok {
-				bookTerms, err := store.BookDictionary(series.Code, book.Code, target.Language)
-				review := dictionaryReview{}
-				if err != nil {
-					review.Problem = err.Error()
-				} else {
-					seriesTerms, seriesErr := store.SeriesDictionary(series.Code, target.Language)
-					if seriesErr != nil {
-						review.Problem = seriesErr.Error()
-					} else {
-						promoted := make(map[string]bool, len(seriesTerms))
-						for _, term := range seriesTerms {
-							promoted[term.Original] = true
-						}
-						for _, term := range bookTerms {
-							review.Terms = append(review.Terms, dictionaryReviewTerm{Term: term, Promoted: promoted[term.Original]})
-						}
-						mergedTerms, dictionaryErr := store.Dictionary(series.Code, book.Code, target.Language)
-						if dictionaryErr != nil {
-							review.Problem = dictionaryErr.Error()
-						} else {
-							review.Warning = len(mergedTerms) > 100
-						}
-					}
-				}
-				dictionaries[target.Language] = review
+				dictionaries[target.Language] = s.reviewDictionary(store, series, book, target.Language)
 			}
 		}
 		if target.Status == library.StatusAnalyzing {
@@ -624,6 +681,38 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 		}
 	}
 	return bookDetailData{Series: series, Book: book, Allowed: allowed, Progress: progress, Dictionaries: dictionaries, Problem: problem}
+}
+
+func (s screens) reviewDictionary(store library.Store, series library.Series, book library.Book, targetLanguage string) dictionaryReview {
+	review := dictionaryReview{
+		SeriesCode: series.Code,
+		BookCode:   book.Code,
+		Language:   targetLanguage,
+	}
+	bookTerms, err := store.BookDictionary(series.Code, book.Code, targetLanguage)
+	if err != nil {
+		review.Problem = err.Error()
+		return review
+	}
+	seriesTerms, err := store.SeriesDictionary(series.Code, targetLanguage)
+	if err != nil {
+		review.Problem = err.Error()
+		return review
+	}
+	promoted := make(map[string]bool, len(seriesTerms))
+	for _, term := range seriesTerms {
+		promoted[term.Original] = true
+	}
+	for _, term := range bookTerms {
+		review.Terms = append(review.Terms, dictionaryReviewTerm{Term: term, Promoted: promoted[term.Original]})
+	}
+	mergedTerms, err := store.Dictionary(series.Code, book.Code, targetLanguage)
+	if err != nil {
+		review.Problem = err.Error()
+		return review
+	}
+	review.Warning = len(mergedTerms) > 100
+	return review
 }
 
 func dictionaryKey(seriesCode, bookCode, targetLanguage string) string {

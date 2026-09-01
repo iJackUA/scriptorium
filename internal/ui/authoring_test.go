@@ -452,6 +452,73 @@ func TestDictionaryReviewOffersPlainTSVAndWarnsWhenTheMergedDictionaryIsLarge(t 
 	}
 }
 
+func TestDictionaryReviewCanEditSaveAndCancelTSVInsideTheModal(t *testing.T) {
+	s, root := newEmptyLibraryServer(t)
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Solaris", "pl")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "solaris"})
+	_, _ = store.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	if err := store.WriteDictionary(series.Code, "solaris", "uk", []library.Term{{Original: "Ocean", Translation: "Океан"}}); err != nil {
+		t.Fatalf("WriteDictionary: %v", err)
+	}
+	if err := store.SetTranslationTargetStatus(series.Code, "solaris", "uk", library.StatusDictionaryReady); err != nil {
+		t.Fatalf("SetTranslationTargetStatus: %v", err)
+	}
+
+	body := serve(s, request(s, "/series/solaris/books/solaris")).Body.String()
+	for _, want := range []string{
+		"Edit Dictionary",
+		`id="dictionary-modal-content-uk"`,
+		`hx-target="#dictionary-modal-content-uk"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Dictionary review is missing %q:\n%s", want, body)
+		}
+	}
+
+	edited := serve(s, request(s, "/series/solaris/books/solaris/targets/uk/dictionary/edit"))
+	if !strings.Contains(edited.Body.String(), `<textarea`) || !strings.Contains(edited.Body.String(), "Ocean\tОкеан") {
+		t.Fatalf("edit mode did not show the current raw TSV: %s", edited.Body.String())
+	}
+
+	invalid := postForm(s, "/series/solaris/books/solaris/targets/uk/dictionary/edit", url.Values{
+		"tsv": {"original\ttranslation\tnote\nOcean\n"},
+	})
+	if !strings.Contains(invalid.Body.String(), `role="alert"`) || !strings.Contains(invalid.Body.String(), "line 2") || !strings.Contains(invalid.Body.String(), `<textarea`) {
+		t.Fatalf("invalid TSV did not stay in edit mode with an error: %s", invalid.Body.String())
+	}
+	terms, err := store.BookDictionary(series.Code, "solaris", "uk")
+	if err != nil {
+		t.Fatalf("BookDictionary after invalid edit: %v", err)
+	}
+	if len(terms) != 1 || terms[0].Translation != "Океан" {
+		t.Fatalf("invalid edit changed the stored Dictionary: %#v", terms)
+	}
+
+	valid := postForm(s, "/series/solaris/books/solaris/targets/uk/dictionary/edit", url.Values{
+		"tsv": {"original\ttranslation\tnote\nOcean\tморе\tmanual\nRiver\tрічка\t"},
+	})
+	if strings.Contains(valid.Body.String(), `<textarea`) || !strings.Contains(valid.Body.String(), "River") || !strings.Contains(valid.Body.String(), "Manage Dictionary") {
+		t.Fatalf("valid TSV did not return to review mode inside the modal: %s", valid.Body.String())
+	}
+	terms, err = store.BookDictionary(series.Code, "solaris", "uk")
+	if err != nil {
+		t.Fatalf("BookDictionary after valid edit: %v", err)
+	}
+	if len(terms) != 2 || terms[0].Translation != "море" || terms[1].Original != "River" {
+		t.Fatalf("valid edit stored %#v, want the edited Terms", terms)
+	}
+
+	editedAgain := serve(s, request(s, "/series/solaris/books/solaris/targets/uk/dictionary/edit"))
+	if !strings.Contains(editedAgain.Body.String(), "River\tрічка") {
+		t.Fatalf("edit mode did not reload the saved TSV: %s", editedAgain.Body.String())
+	}
+	cancelled := serve(s, request(s, "/series/solaris/books/solaris/targets/uk/dictionary/review"))
+	if strings.Contains(cancelled.Body.String(), `<textarea`) || !strings.Contains(cancelled.Body.String(), "Manage Dictionary") {
+		t.Fatalf("cancel/review did not return read-only content: %s", cancelled.Body.String())
+	}
+}
+
 func TestPromotingATermFromDictionaryReviewWritesTheSeriesDictionary(t *testing.T) {
 	s, root := newEmptyLibraryServer(t)
 	store := library.NewStore(root)
@@ -473,6 +540,9 @@ func TestPromotingATermFromDictionaryReviewWritesTheSeriesDictionary(t *testing.
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "form-problem") {
 		t.Fatalf("promoting Dictionary Term failed: %d\n%s", rec.Code, rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), "Manage Dictionary") || strings.Contains(rec.Body.String(), `id="book-detail"`) {
+		t.Fatalf("promoting a Term replaced or closed the Dictionary modal content: %s", rec.Body.String())
+	}
 	terms, err := store.SeriesDictionary(series.Code, "uk")
 	if err != nil {
 		t.Fatalf("SeriesDictionary: %v", err)
@@ -488,6 +558,9 @@ func TestPromotingATermFromDictionaryReviewWritesTheSeriesDictionary(t *testing.
 	rec = postForm(s, "/series/solaris/books/solaris/targets/uk/dictionary/unpromote", url.Values{"term": {"Ocean"}})
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "form-problem") {
 		t.Fatalf("unpromoting Dictionary Term failed: %d\n%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Manage Dictionary") || strings.Contains(rec.Body.String(), `id="book-detail"`) {
+		t.Fatalf("unpromoting a Term replaced or closed the Dictionary modal content: %s", rec.Body.String())
 	}
 	terms, err = store.SeriesDictionary(series.Code, "uk")
 	if err != nil {
