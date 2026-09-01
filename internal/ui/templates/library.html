@@ -37,19 +37,19 @@
               {{$series := .}}
               {{range .Books}}
                 <li>
-                  <button class="btn btn-ghost rounded-field w-full justify-between h-auto gap-4 py-3 font-normal normal-case"
+                  <button class="btn btn-ghost rounded-field w-full flex-col items-start h-auto gap-1 py-3 font-normal normal-case"
                           hx-get="/series/{{$series.Code}}/books/{{.Code}}"
                           hx-target="#book-detail"
                           hx-swap="innerHTML">
-                    <span class="flex flex-col items-start gap-0.5 text-left">
-                      <span class="text-control font-semibold">{{.Label}}</span>
-                      <span class="text-micro text-base-content/60">{{with .Author}}{{.}} · {{end}}{{.Code}}</span>
-                    </span>
-                    <span class="flex gap-1 flex-wrap justify-end">
-                      {{range .Targets}}
-                        <span class="badge badge-sm badge-soft whitespace-nowrap text-micro {{template "status-class" .Status}}">{{languageName .Language}} ({{.Language}}): {{.Status}}</span>
-                      {{end}}
-                    </span>
+                    <span class="text-control font-semibold text-left">{{.Label}}</span>
+                    {{with .Targets}}
+                      <span class="flex gap-1 flex-wrap">
+                        {{range .}}
+                          <span class="badge badge-sm badge-soft whitespace-nowrap text-micro {{template "status-class" .Status}}">{{languageName .Language}} ({{.Language}}): {{.Status}}</span>
+                        {{end}}
+                      </span>
+                    {{end}}
+                    <span class="text-micro text-base-content/60 text-left">{{with .Author}}{{.}} · {{end}}{{.Code}}</span>
                   </button>
                 </li>
               {{end}}
