@@ -87,6 +87,7 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary.tsv", s.bookDictionaryTSV)
 	mux.HandleFunc("GET /series/{series}/dictionaries/{target}", s.seriesDictionaryTSV)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/promote", s.promoteDictionaryTerm)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/unpromote", s.unpromoteDictionaryTerm)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary-progress", s.dictionaryProgress)
 	return mux
 }
@@ -417,6 +418,18 @@ func (s screens) promoteDictionaryTerm(w http.ResponseWriter, r *http.Request) {
 	s.bookDetail(w, r)
 }
 
+func (s screens) unpromoteDictionaryTerm(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	if err := store.UnpromoteDictionaryTerm(r.PathValue("series"), r.PathValue("target"), r.FormValue("term")); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	s.bookDetail(w, r)
+}
+
 func (s screens) buildDictionary(ctx context.Context, store library.Store, workspaceRoot string, config workspace.Config, series library.Series, book library.Book, targetLanguage, key string, runID uint64) {
 	defer s.dictionaryRuns.clear(key, runID)
 	fail := func(err error) {
@@ -546,9 +559,14 @@ type bookDetailData struct {
 }
 
 type dictionaryReview struct {
-	Terms   []library.Term
+	Terms   []dictionaryReviewTerm
 	Warning bool
 	Problem string
+}
+
+type dictionaryReviewTerm struct {
+	library.Term
+	Promoted bool
 }
 
 type dictionaryProgressData struct {
@@ -569,10 +587,29 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 		if target.Status != library.StatusNew && target.Status != library.StatusAnalyzing {
 			store, ok := s.current()
 			if ok {
-				terms, err := store.Dictionary(series.Code, book.Code, target.Language)
-				review := dictionaryReview{Terms: terms, Warning: len(terms) > 100}
+				bookTerms, err := store.BookDictionary(series.Code, book.Code, target.Language)
+				review := dictionaryReview{}
 				if err != nil {
 					review.Problem = err.Error()
+				} else {
+					seriesTerms, seriesErr := store.SeriesDictionary(series.Code, target.Language)
+					if seriesErr != nil {
+						review.Problem = seriesErr.Error()
+					} else {
+						promoted := make(map[string]bool, len(seriesTerms))
+						for _, term := range seriesTerms {
+							promoted[term.Original] = true
+						}
+						for _, term := range bookTerms {
+							review.Terms = append(review.Terms, dictionaryReviewTerm{Term: term, Promoted: promoted[term.Original]})
+						}
+						mergedTerms, dictionaryErr := store.Dictionary(series.Code, book.Code, target.Language)
+						if dictionaryErr != nil {
+							review.Problem = dictionaryErr.Error()
+						} else {
+							review.Warning = len(mergedTerms) > 100
+						}
+					}
 				}
 				dictionaries[target.Language] = review
 			}

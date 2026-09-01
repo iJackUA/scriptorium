@@ -191,6 +191,36 @@ func TestPromotingABookTermMakesItAvailableToLaterBooks(t *testing.T) {
 	}
 }
 
+func TestUnpromotingATermLeavesTheBookDictionaryAlone(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	_, _ = s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	if err := s.WriteDictionary(series.Code, "solaris", "uk", []Term{{Original: "Ocean", Translation: "Океан"}}); err != nil {
+		t.Fatalf("WriteDictionary: %v", err)
+	}
+	if err := s.PromoteDictionaryTerm(series.Code, "solaris", "uk", "Ocean"); err != nil {
+		t.Fatalf("PromoteDictionaryTerm: %v", err)
+	}
+	if err := s.UnpromoteDictionaryTerm(series.Code, "uk", "Ocean"); err != nil {
+		t.Fatalf("UnpromoteDictionaryTerm: %v", err)
+	}
+	bookTerms, err := s.BookDictionary(series.Code, "solaris", "uk")
+	if err != nil {
+		t.Fatalf("BookDictionary: %v", err)
+	}
+	if want := []Term{{Original: "Ocean", Translation: "Океан"}}; !slices.Equal(bookTerms, want) {
+		t.Errorf("BookDictionary = %#v, want %#v", bookTerms, want)
+	}
+	seriesTerms, err := s.SeriesDictionary(series.Code, "uk")
+	if err != nil {
+		t.Fatalf("SeriesDictionary: %v", err)
+	}
+	if len(seriesTerms) != 0 {
+		t.Errorf("SeriesDictionary = %#v, want no Ocean", seriesTerms)
+	}
+}
+
 func TestWritingDictionaryPreservesHandEditsAndAddsNewTerms(t *testing.T) {
 	s := store(t)
 	series, _ := s.CreateSeries("Solaris", "pl")

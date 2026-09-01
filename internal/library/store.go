@@ -509,6 +509,25 @@ func (s Store) PromoteDictionaryTerm(seriesCode, bookCode, targetLanguage, origi
 	return fmt.Errorf("Dictionary Term %q is not in Book %q", original, bookCode)
 }
 
+// UnpromoteDictionaryTerm removes a Term from the Series Dictionary without
+// changing the Book Dictionary it was originally promoted from.
+func (s Store) UnpromoteDictionaryTerm(seriesCode, targetLanguage, original string) error {
+	seriesTerms, err := s.SeriesDictionary(seriesCode, targetLanguage)
+	if err != nil {
+		return err
+	}
+	remaining := make([]Term, 0, len(seriesTerms))
+	for _, term := range seriesTerms {
+		if term.Original != original {
+			remaining = append(remaining, term)
+		}
+	}
+	if len(remaining) == len(seriesTerms) {
+		return fmt.Errorf("Dictionary Term %q is not in the Series Dictionary", original)
+	}
+	return s.WriteSeriesDictionary(seriesCode, targetLanguage, remaining)
+}
+
 func (s Store) bookDictionaryPath(seriesCode, bookCode, targetLanguage, sourceLanguage string) string {
 	return filepath.Join(s.root, seriesCode, BooksDir, bookCode, TranslationsDir, languagePair(sourceLanguage, targetLanguage), DictionaryFile)
 }

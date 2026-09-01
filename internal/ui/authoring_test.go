@@ -444,6 +444,10 @@ func TestPromotingATermFromDictionaryReviewWritesTheSeriesDictionary(t *testing.
 	if err := store.SetTranslationTargetStatus(series.Code, "solaris", "uk", library.StatusDictionaryReady); err != nil {
 		t.Fatalf("SetTranslationTargetStatus: %v", err)
 	}
+	beforePromotion := serve(s, request(s, "/series/solaris/books/solaris")).Body.String()
+	if !strings.Contains(beforePromotion, "Promote to Series dict") {
+		t.Errorf("unpromoted Term is not offered promotion:\n%s", beforePromotion)
+	}
 
 	rec := postForm(s, "/series/solaris/books/solaris/targets/uk/dictionary/promote", url.Values{"term": {"Ocean"}})
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "form-problem") {
@@ -455,6 +459,26 @@ func TestPromotingATermFromDictionaryReviewWritesTheSeriesDictionary(t *testing.
 	}
 	if len(terms) != 1 || terms[0].Original != "Ocean" {
 		t.Errorf("SeriesDictionary = %#v, want promoted Ocean", terms)
+	}
+	body := serve(s, request(s, "/series/solaris/books/solaris")).Body.String()
+	if !strings.Contains(body, "Unpromote from Series Dict") || !strings.Contains(body, "btn-warning") {
+		t.Errorf("promoted Term is not highlighted for unpromotion:\n%s", body)
+	}
+
+	rec = postForm(s, "/series/solaris/books/solaris/targets/uk/dictionary/unpromote", url.Values{"term": {"Ocean"}})
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("unpromoting Dictionary Term failed: %d\n%s", rec.Code, rec.Body.String())
+	}
+	terms, err = store.SeriesDictionary(series.Code, "uk")
+	if err != nil {
+		t.Fatalf("SeriesDictionary: %v", err)
+	}
+	if len(terms) != 0 {
+		t.Errorf("SeriesDictionary = %#v, want no Ocean", terms)
+	}
+	bookTerms, err := store.BookDictionary(series.Code, "solaris", "uk")
+	if err != nil || len(bookTerms) != 1 || bookTerms[0].Original != "Ocean" {
+		t.Errorf("BookDictionary = %#v, %v; want retained Ocean", bookTerms, err)
 	}
 }
 
