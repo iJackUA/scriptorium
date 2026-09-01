@@ -160,12 +160,29 @@ func TestARejectedBookCodeIsReportedWithTheFormStillFilledIn(t *testing.T) {
 		if !strings.Contains(body, "form-problem") {
 			t.Errorf("%s: the rejection was not reported on screen:\n%s", name, body)
 		}
+		if !strings.Contains(body, `id="add-book-modal"`) || !strings.Contains(body, "data-open-on-render") {
+			t.Errorf("%s: the rejected Book form did not return in an openable modal:\n%s", name, body)
+		}
 		// Retyping the whole form to fix one field is what the round trip
 		// through the server threatens, so the values come back with it.
 		for _, want := range []string{values.Get("code"), "Something Else", "Someone"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s: the form came back without %q", name, want)
 			}
+		}
+	}
+}
+
+func TestLibraryActionsOpenTheAuthoringAndSettingsModals(t *testing.T) {
+	s, _ := newEmptyLibraryServer(t)
+	body := serve(s, request(s, "/")).Body.String()
+
+	for _, want := range []string{
+		">Add Book</button>", ">Add Series</button>", `aria-label="Workspace settings"`,
+		`id="add-book-modal"`, `id="add-series-modal"`, `id="workspace-settings-modal"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("library navigation is missing %q:\n%s", want, body)
 		}
 	}
 }
@@ -414,7 +431,10 @@ func TestDictionaryReviewOffersPlainTSVAndWarnsWhenTheMergedDictionaryIsLarge(t 
 	}
 
 	body := serve(s, request(s, "/series/solaris/books/solaris")).Body.String()
-	for _, want := range []string{"Book Dictionary", "Series Dictionary", "101 Terms will bloat every translation request"} {
+	for _, want := range []string{
+		"Manage Dictionary", "Book Dictionary", "Series Dictionary", "101 Terms will bloat every translation request",
+		`id="dictionary-modal-uk"`, `document.getElementById('dictionary-modal-uk').showModal()`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("Dictionary review does not show %q:\n%s", want, body)
 		}

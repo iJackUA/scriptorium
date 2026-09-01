@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"html/template"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -217,6 +218,18 @@ func TestStaticAssetsAreServedFromTheBinary(t *testing.T) {
 		}
 		if !strings.Contains(rec.Body.String(), marker) {
 			t.Errorf("%s does not look like the real asset", path)
+		}
+	}
+}
+
+func TestLanguageControlsPositionModalDropdownsInTheDialogTopLayer(t *testing.T) {
+	body, err := execute("layout", template.HTML(""))
+	if err != nil {
+		t.Fatalf("render layout: %v", err)
+	}
+	for _, want := range []string{"dropdownParent: dialog", "dropdown.style.position = 'fixed'", "dropdown.style.top = rect.bottom + 'px'"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("language controls do not position a modal dropdown above the modal content: missing %q", want)
 		}
 	}
 }

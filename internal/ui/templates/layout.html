@@ -10,14 +10,25 @@
   <script src="/static/tom-select.min.js" defer></script>
 </head>
 <body class="bg-base-200 min-h-screen">
-  <div class="navbar bg-base-100 shadow-sm">
-    <span class="text-xl font-semibold px-4">Scriptorium</span>
-  </div>
-  <main id="app" class="p-6">{{.}}</main>
+  <div id="app">{{.}}</div>
   <script>
-    function languageControls(root) { root.querySelectorAll('select.language-select').forEach(function (select) { if (!select.tomselect) new TomSelect(select, {create: false, searchField: ['text', 'value'], dropdownParent: 'body'}); }); }
-    document.addEventListener('DOMContentLoaded', function () { languageControls(document); });
-    document.body.addEventListener('htmx:afterSwap', function (event) { languageControls(event.target); });
+    function languageControls(root) {
+      root.querySelectorAll('select.language-select').forEach(function (select) {
+        if (select.tomselect) return;
+        var dialog = select.closest('dialog');
+        var control = new TomSelect(select, {create: false, searchField: ['text', 'value'], dropdownParent: dialog || undefined});
+        if (dialog) control.on('dropdown_open', function (dropdown) {
+          var rect = control.control.getBoundingClientRect();
+          dropdown.style.position = 'fixed';
+          dropdown.style.top = rect.bottom + 'px';
+          dropdown.style.left = rect.left + 'px';
+          dropdown.style.width = rect.width + 'px';
+        });
+      });
+    }
+    document.addEventListener('DOMContentLoaded', function () { languageControls(document); openRenderedModals(document); });
+    function openRenderedModals(root) { root.querySelectorAll('dialog[data-open-on-render]').forEach(function (dialog) { dialog.showModal(); }); }
+    document.body.addEventListener('htmx:afterSwap', function (event) { languageControls(event.target); openRenderedModals(event.target); });
     function syncBookSource() { var series = document.querySelector('select[name="series"]'), source = document.querySelector('#book-source-language'); if (series && source) source.disabled = series.value !== ''; }
     document.addEventListener('change', function (event) { if (event.target.name === 'series') syncBookSource(); });
     document.addEventListener('DOMContentLoaded', syncBookSource);

@@ -642,14 +642,14 @@ type libraryScreen struct {
 	TargetLanguages []string
 }
 
-// The two panels the library page carries, named so that a rejection can
-// reopen the one it came from.
+// The library's forms, named so that a rejection can reopen the modal it came
+// from.
 const (
 	seriesPanel = "series"
 	bookPanel   = "book"
 )
 
-// form is what the user typed into one panel and what was wrong with it. It
+// form is what the user typed into one modal and what was wrong with it. It
 // exists because a rejection re-renders the whole screen — there is no
 // client-side state to preserve the fields, so the server hands them back.
 type form struct {
@@ -663,11 +663,11 @@ type form struct {
 	Language string
 }
 
-// For is the state to render the named panel with: what the user typed, if
-// this is the panel they were typing into, and nothing if it is not.
+// For is the state to render the named modal with: what the user typed, if
+// this is the modal they were typing into, and nothing if it is not.
 //
-// It exists so the template asks once per panel instead of guarding every
-// field, and so a rejection in one panel cannot leak into the other.
+// It exists so the template asks once per modal instead of guarding every
+// field, and so a rejection in one modal cannot leak into the other.
 func (f form) For(panel string) form {
 	if f.Panel != panel {
 		return form{}
