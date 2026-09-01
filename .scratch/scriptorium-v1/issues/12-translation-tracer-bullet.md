@@ -16,19 +16,30 @@ Tests drive the service layer over a temporary workspace and observe the output 
 
 **Blocked by:** 05 — Source File upload; 08 — Agent interface, `claude` adapter, and the fake; 09 — Chunker and numbered-node validator; 11 — Dictionary review, override, and promotion.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A real fb2 in, a translated fb2 out, with structure asserted identical — ADR-0002's central claim
-- [ ] The output lands at `translations/<pair>/out/<book-code>.<target>.<ext>`, so translations of one Book never collide
-- [ ] The Source File is byte-for-byte unchanged after a full run
-- [ ] Original and accepted translated Chunks are persisted with stable global Text Node indices before final Book Composition
-- [ ] The final output is composed from persisted Chunk Translations rather than in-memory Agent responses
-- [ ] Recorded requests are strictly ordered and never overlap, as ADR-0003 requires
-- [ ] Request *N* contains the translation returned for request *N-1*, and the Continuity Window is marked as not to be translated
-- [ ] The Continuity Window is empty at the start of each Chapter
-- [ ] Every translation request contains the merged Dictionary, with Book Dictionary entries overriding Series ones
-- [ ] Recorded requests respect the word budget and never cross a Chapter
-- [ ] `state.json` records index, status, source hash, and cost per Chunk, written temp-file-and-rename
-- [ ] Status moves to `Translating` and then `Translated`
-- [ ] A `.txt` with no detectable Chapters translates end to end
-- [ ] The prompt template's required slots are documented in one place
+- [x] A real fb2 in, a translated fb2 out, with structure asserted identical — ADR-0002's central claim
+- [x] The output lands at `translations/<pair>/out/<book-code>.<target>.<ext>`, so translations of one Book never collide
+- [x] The Source File is byte-for-byte unchanged after a full run
+- [x] Original and accepted translated Chunks are persisted with stable global Text Node indices before final Book Composition
+- [x] The final output is composed from persisted Chunk Translations rather than in-memory Agent responses
+- [x] Recorded requests are strictly ordered and never overlap, as ADR-0003 requires
+- [x] Request *N* contains the translation returned for request *N-1*, and the Continuity Window is marked as not to be translated
+- [x] The Continuity Window is empty at the start of each Chapter
+- [x] Every translation request contains the merged Dictionary, with Book Dictionary entries overriding Series ones
+- [x] Recorded requests respect the word budget and never cross a Chapter
+- [x] `state.json` records index, status, source hash, and cost per Chunk, written temp-file-and-rename
+- [x] Status moves to `Translating` and then `Translated`
+- [x] A `.txt` with no detectable Chapters translates end to end
+- [x] The prompt template's required slots are documented in one place
+
+## Comments
+
+2026-09-01: Implemented the serial service-layer translation path for FB2 and
+TXT. The service atomically materializes numbered original Chunks and a
+manifest, records fingerprinted per-Chunk progress, injects the merged
+Dictionary and chapter-bounded Continuity Window into every Agent request,
+persists accepted Chunk Translations, and composes the final Book only from
+those persisted artifacts. A real Sherlock Holmes FB2 integration test proves
+structural fidelity and an unchanged Source File; focused tests cover prompt
+ordering, Dictionary override, state, and chapterless TXT. `make check` passes.

@@ -1,5 +1,5 @@
-// Package translation contains pure building blocks for the translation
-// pipeline.
+// Package translation contains the translation pipeline and its pure chunking,
+// Dictionary Building, prompt, and validation components.
 package translation
 
 import (
