@@ -1,13 +1,13 @@
 {{define "welcome"}}
-<div class="navbar bg-base-100 shadow-sm">
-  <span class="text-xl font-semibold px-4">Scriptorium</span>
-</div>
-<main class="p-6">
+<header class="navbar sticky top-0 z-30 min-h-14 border-b border-base-300 bg-base-100/80 px-6 backdrop-blur-xl">
+  <span class="text-subhead">Scriptorium</span>
+</header>
+<main class="px-6 py-20">
   <div class="hero">
-    <div class="hero-content flex-col max-w-xl text-center gap-6">
-    <div class="flex flex-col gap-2">
-      <h1 class="text-3xl font-semibold">Choose a workspace folder</h1>
-      <p class="opacity-70">
+    <div class="hero-content flex-col max-w-2xl text-center gap-10">
+    <div class="flex flex-col gap-5">
+      <h1 class="text-section sm:text-hero">Choose a workspace folder</h1>
+      <p class="text-body text-base-content/60">
         Your whole library — every Series, Book and translation — lives as plain
         files under one folder, on whichever drive you like. Back it up, sync it,
         or edit it by hand; Scriptorium reads it either way.
@@ -15,12 +15,12 @@
     </div>
 
     {{with .Problem}}
-      <div role="alert" data-testid="workspace-problem" class="alert alert-warning text-left">
+      <div role="alert" data-testid="workspace-problem" class="alert alert-warning alert-soft rounded-box text-left text-control">
         <span>{{.}}</span>
       </div>
     {{end}}
 
-    <button class="btn btn-primary"
+    <button class="btn btn-primary btn-lg rounded-selector px-8 text-body font-normal"
             hx-post="/workspace"
             hx-target="#app"
             hx-swap="innerHTML">

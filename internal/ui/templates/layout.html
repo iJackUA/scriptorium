@@ -4,12 +4,14 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Scriptorium</title>
-  <link rel="stylesheet" href="/static/app.css">
+  {{/* Tom Select's vendored stylesheet comes first so app.css can restyle its
+       controls onto the design tokens; both are unlayered, so order decides. */}}
   <link rel="stylesheet" href="/static/tom-select.css">
+  <link rel="stylesheet" href="/static/app.css">
   <script src="/static/htmx.min.js" defer></script>
   <script src="/static/tom-select.min.js" defer></script>
 </head>
-<body class="bg-base-200 min-h-screen">
+<body class="bg-base-200 text-base-content font-sans min-h-screen">
   <div id="app">{{.}}</div>
   <script>
     function languageControls(root) {
@@ -17,6 +19,10 @@
         if (select.tomselect) return;
         var dialog = select.closest('dialog');
         var control = new TomSelect(select, {create: false, searchField: ['text', 'value'], dropdownParent: dialog || undefined});
+        // Tom Select copies the original element's classes onto its wrapper.
+        // The daisyUI field chrome is there for the unenhanced select, and
+        // would otherwise draw a second frame around the control it builds.
+        control.wrapper.classList.remove('select');
         if (dialog) control.on('dropdown_open', function (dropdown) {
           var rect = control.control.getBoundingClientRect();
           dropdown.style.position = 'fixed';

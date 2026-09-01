@@ -4,6 +4,270 @@
    automatic source detection has to be pointed at them explicitly. */
 @source "../../internal/ui/templates";
 
+/* The palette, radii and type scale come from DESIGN.md. Everything visual is
+   expressed as theme tokens rather than per-element classes, so a change to
+   the styleguide is a change here and not a sweep through the templates. */
 @plugin "daisyui" {
-  themes: light --default, dark --prefersdark;
+  themes: false;
+}
+
+/* Light chapter: white retail surfaces over the pale neutral field. */
+@plugin "daisyui/theme" {
+  name: "light";
+  default: true;
+  color-scheme: light;
+
+  --color-base-100: #ffffff;
+  --color-base-200: #f5f5f7;
+  --color-base-300: #d2d2d7;
+  --color-base-content: #1d1d1f;
+
+  --color-primary: #0071e3;
+  --color-primary-content: #ffffff;
+  --color-secondary: #1d1d1f;
+  --color-secondary-content: #ffffff;
+  --color-accent: #0066cc;
+  --color-accent-content: #ffffff;
+  --color-neutral: #424245;
+  --color-neutral-content: #f5f5f7;
+
+  /* DESIGN.md records no semantic status palette; these are Apple's own
+     system colours, darkened to the shades Apple uses on light surfaces. */
+  --color-info: #0071e3;
+  --color-info-content: #ffffff;
+  --color-success: #248a3d;
+  --color-success-content: #ffffff;
+  --color-warning: #b25000;
+  --color-warning-content: #ffffff;
+  --color-error: #d70015;
+  --color-error-content: #ffffff;
+
+  /* Radius by component class, not one size for everything: capsules for
+     selection chrome and badges, 8px fields, 18px cards and panels. */
+  --radius-selector: 980px;
+  --radius-field: 0.5rem;
+  --radius-box: 1.125rem;
+
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+
+  /* Contrast and borders carry the layering; shadows stay out of the chrome. */
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* Dark chapter: absolute black canvas with graphite surface stepping. */
+@plugin "daisyui/theme" {
+  name: "dark";
+  prefersdark: true;
+  color-scheme: dark;
+
+  --color-base-100: #1d1d1f;
+  --color-base-200: #000000;
+  --color-base-300: #2a2a2c;
+  --color-base-content: #f5f5f7;
+
+  --color-primary: #0071e3;
+  --color-primary-content: #ffffff;
+  --color-secondary: #f5f5f7;
+  --color-secondary-content: #1d1d1f;
+  --color-accent: #2997ff;
+  --color-accent-content: #000000;
+  /* Lighter than the graphite surfaces on purpose: neutral also tints the
+     quiet status badges, which would otherwise vanish into a dark card. */
+  --color-neutral: #86868b;
+  --color-neutral-content: #1d1d1f;
+
+  --color-info: #2997ff;
+  --color-info-content: #001526;
+  --color-success: #30d158;
+  --color-success-content: #00250d;
+  --color-warning: #ff9f0a;
+  --color-warning-content: #2b1700;
+  --color-error: #ff453a;
+  --color-error-content: #2b0000;
+
+  --radius-selector: 980px;
+  --radius-field: 0.5rem;
+  --radius-box: 1.125rem;
+
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@theme {
+  /* SF Pro ships with macOS, which is the only platform this app is packaged
+     for, so the substitutes DESIGN.md names are only ever the fallback. */
+  --font-sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Inter",
+    "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: "SF Pro Display", -apple-system, BlinkMacSystemFont,
+    "Inter Tight", "Helvetica Neue", Helvetica, Arial, sans-serif;
+
+  /* The display tiers of the styleguide's hierarchy table, with its tracking
+     folded in so a size never has to be paired with a tracking class. */
+  --text-hero: 3.5rem;
+  --text-hero--line-height: 1.07;
+  --text-hero--letter-spacing: -0.02em;
+  --text-hero--font-weight: 600;
+  --text-section: 2rem;
+  --text-section--line-height: 1.1;
+  --text-section--letter-spacing: -0.015em;
+  --text-section--font-weight: 600;
+  --text-title: 1.3125rem;
+  --text-title--line-height: 1.2;
+  --text-title--letter-spacing: -0.01em;
+  --text-title--font-weight: 600;
+  --text-subhead: 1.1875rem;
+  --text-subhead--line-height: 1.21;
+  --text-subhead--letter-spacing: -0.01em;
+  --text-subhead--font-weight: 600;
+  --text-body: 1.0625rem;
+  --text-body--line-height: 1.47;
+  --text-body--letter-spacing: -0.012em;
+  --text-control: 0.875rem;
+  --text-control--line-height: 1.4;
+  --text-control--letter-spacing: -0.016em;
+  --text-micro: 0.75rem;
+  --text-micro--line-height: 1.33;
+  --text-micro--letter-spacing: -0.01em;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Display metrics belong to the headline family, not to each heading's
+     class list. */
+  h1, h2, h3 {
+    font-family: var(--font-display);
+  }
+
+  /* One blue focus signal everywhere, per the accessibility row of the depth
+     table. Components that draw their own — daisyUI's buttons and fields —
+     land in a later layer and keep theirs. */
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+}
+
+/* A quiet micro label is what separates the groups inside a panel; the
+   styleguide asks for surface and rule changes there rather than ornament. */
+@utility section-label {
+  font-size: var(--text-micro);
+  line-height: var(--text-micro--line-height);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+}
+
+/* Inline links take the long-form reading blue rather than the action blue. */
+@layer components {
+  .link {
+    color: var(--color-accent);
+    text-underline-offset: 0.2em;
+  }
+}
+
+/* Tom Select draws the language pickers and arrives with its own light-grey
+   chrome, three-pixel corners and blue hover — none of it on the styleguide's
+   tokens. These rules are deliberately unlayered so they outrank the vendored
+   stylesheet, which the page loads after this one. */
+.ts-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ts-control {
+  border: var(--border) solid var(--color-base-300);
+  border-radius: var(--radius-field);
+  background-color: var(--color-base-100);
+  color: var(--color-base-content);
+  /* Same height as a daisyUI field, so a picker sits flush with the native
+     selects it is stacked with. */
+  min-height: calc(var(--size-field, 0.25rem) * 10);
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  font-size: var(--text-control);
+  letter-spacing: var(--text-control--letter-spacing);
+  gap: 0.25rem;
+}
+
+/* The ring belongs to the control, not to the bare input inside it. */
+.ts-control > input:focus,
+.ts-control > input:focus-visible {
+  outline: none;
+}
+
+.ts-wrapper.focus .ts-control,
+.ts-control:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--color-primary) 25%, transparent);
+}
+
+.ts-wrapper.multi .ts-control > div,
+.ts-wrapper.multi .ts-control > div.active {
+  border: 0;
+  border-radius: var(--radius-selector);
+  padding: 0.125rem 0.625rem;
+  margin: 0;
+  background: var(--color-base-200);
+  color: var(--color-base-content);
+}
+
+.ts-wrapper.multi .ts-control > div.active {
+  background: var(--color-primary);
+  color: var(--color-primary-content);
+}
+
+.ts-dropdown {
+  border: var(--border) solid var(--color-base-300);
+  border-top-width: var(--border);
+  border-radius: var(--radius-field);
+  background: var(--color-base-100);
+  color: var(--color-base-content);
+  padding: 0.25rem;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.08);
+  font-size: var(--text-control);
+}
+
+.ts-dropdown .option,
+.ts-dropdown .optgroup-header,
+.ts-dropdown .no-results,
+.ts-dropdown .create {
+  border-radius: var(--radius-field);
+  padding: 0.375rem 0.625rem;
+}
+
+.ts-dropdown .optgroup-header,
+.ts-dropdown .active,
+.ts-dropdown .active.create {
+  background: var(--color-base-200);
+  color: var(--color-base-content);
+}
+
+.ts-dropdown [data-selectable] .highlight {
+  border-radius: 0.125rem;
+  background: color-mix(in oklab, var(--color-primary) 20%, transparent);
+}
+
+/* daisyUI outlines a focused field in the text colour; the styleguide wants
+   the one blue focus signal here too. */
+.input:focus,
+.input:focus-within,
+.select:focus,
+.select:focus-within,
+.file-input:focus,
+.file-input:focus-within,
+.textarea:focus,
+.textarea:focus-within {
+  outline-color: var(--color-primary);
 }

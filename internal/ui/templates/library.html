@@ -1,23 +1,23 @@
 {{define "library"}}
-<div class="navbar bg-base-100 shadow-sm">
-  <span class="text-xl font-semibold px-4">Scriptorium</span>
-  <div class="navbar-end gap-2 px-4">
-    <button class="btn btn-primary btn-sm" type="button" onclick="document.getElementById('add-book-modal').showModal()">Add Book</button>
-    <button class="btn btn-secondary btn-sm" type="button" onclick="document.getElementById('add-series-modal').showModal()">Add Series</button>
-    <button class="btn btn-ghost btn-sm btn-square" type="button" aria-label="Workspace settings" title="Workspace settings" onclick="document.getElementById('workspace-settings-modal').showModal()">
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="size-5"><path stroke-linecap="round" stroke-linejoin="round" d="M10.3 4.3a1.65 1.65 0 0 1 3.4 0 1.65 1.65 0 0 0 2.48 1.05 1.65 1.65 0 0 1 2.4 2.4 1.65 1.65 0 0 0 1.05 2.48 1.65 1.65 0 0 1 0 3.4 1.65 1.65 0 0 0-1.05 2.48 1.65 1.65 0 0 1-2.4 2.4 1.65 1.65 0 0 0-2.48 1.05 1.65 1.65 0 0 1-3.4 0 1.65 1.65 0 0 0-2.48-1.05 1.65 1.65 0 0 1-2.4-2.4 1.65 1.65 0 0 0-1.05-2.48 1.65 1.65 0 0 1 0-3.4 1.65 1.65 0 0 0 1.05-2.48 1.65 1.65 0 0 1 2.4-2.4 1.65 1.65 0 0 0 2.48-1.05Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg>
+<header class="navbar sticky top-0 z-30 min-h-14 border-b border-base-300 bg-base-100/80 px-6 backdrop-blur-xl">
+  <span class="flex-1 text-subhead">Scriptorium</span>
+  <div class="navbar-end gap-2">
+    <button class="btn btn-primary btn-sm rounded-selector px-4" type="button" onclick="document.getElementById('add-book-modal').showModal()">Add Book</button>
+    <button class="btn btn-secondary btn-sm rounded-selector px-4" type="button" onclick="document.getElementById('add-series-modal').showModal()">Add Series</button>
+    <button class="btn btn-ghost btn-sm btn-square rounded-selector" type="button" aria-label="Workspace settings" title="Workspace settings" onclick="document.getElementById('workspace-settings-modal').showModal()">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true" class="size-5"><path stroke-linecap="round" stroke-linejoin="round" d="M10.3 4.3a1.65 1.65 0 0 1 3.4 0 1.65 1.65 0 0 0 2.48 1.05 1.65 1.65 0 0 1 2.4 2.4 1.65 1.65 0 0 0 1.05 2.48 1.65 1.65 0 0 1 0 3.4 1.65 1.65 0 0 0-1.05 2.48 1.65 1.65 0 0 1-2.4 2.4 1.65 1.65 0 0 0-2.48 1.05 1.65 1.65 0 0 1-3.4 0 1.65 1.65 0 0 0-2.48-1.05 1.65 1.65 0 0 1-2.4-2.4 1.65 1.65 0 0 0-1.05-2.48 1.65 1.65 0 0 1 0-3.4 1.65 1.65 0 0 0 1.05-2.48 1.65 1.65 0 0 1 2.4-2.4 1.65 1.65 0 0 0 2.48-1.05Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"/></svg>
     </button>
   </div>
-</div>
-<main class="p-6">
+</header>
+<main class="mx-auto max-w-7xl px-6 py-10">
   <div class="flex flex-col gap-6">
 
   <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-6">
     <div class="flex flex-col gap-6">
       {{if not .Library.Series}}
-        <div class="card bg-base-100 shadow-sm">
+        <div class="card border border-base-300 bg-base-100">
           <div class="card-body">
-            <p class="opacity-60" data-testid="empty-library">
+            <p class="text-body text-base-content/60" data-testid="empty-library">
               Nothing here yet. Add a Book, and it gets a folder of its own in
               your workspace.
             </p>
@@ -25,29 +25,29 @@
         </div>
       {{end}}
       {{range .Library.Series}}
-        <section class="card bg-base-100 shadow-sm">
+        <section class="card border border-base-300 bg-base-100">
           <div class="card-body gap-4">
             {{if not .Standalone}}
-              <h2 class="card-title">
+              <h2 class="card-title flex-wrap items-center text-title">
                 {{.Name}}
-                <span class="badge badge-ghost">{{languageName .SourceLanguage}} ({{.SourceLanguage}})</span>
+                <span class="badge badge-sm badge-ghost whitespace-nowrap text-micro">{{languageName .SourceLanguage}} ({{.SourceLanguage}})</span>
               </h2>
             {{end}}
-            <ul class="flex flex-col gap-2">
+            <ul class="flex flex-col gap-1">
               {{$series := .}}
               {{range .Books}}
                 <li>
-                  <button class="btn btn-ghost w-full justify-between h-auto py-3 normal-case"
+                  <button class="btn btn-ghost rounded-field w-full justify-between h-auto gap-4 py-3 font-normal normal-case"
                           hx-get="/series/{{$series.Code}}/books/{{.Code}}"
                           hx-target="#book-detail"
                           hx-swap="innerHTML">
-                    <span class="flex flex-col items-start text-left">
-                      <span class="font-medium">{{.Label}}</span>
-                      <span class="text-xs opacity-60">{{with .Author}}{{.}} · {{end}}{{.Code}}</span>
+                    <span class="flex flex-col items-start gap-0.5 text-left">
+                      <span class="text-control font-semibold">{{.Label}}</span>
+                      <span class="text-micro text-base-content/60">{{with .Author}}{{.}} · {{end}}{{.Code}}</span>
                     </span>
                     <span class="flex gap-1 flex-wrap justify-end">
                       {{range .Targets}}
-                        <span class="badge {{template "status-class" .Status}}">{{languageName .Language}} ({{.Language}}): {{.Status}}</span>
+                        <span class="badge badge-sm badge-soft whitespace-nowrap text-micro {{template "status-class" .Status}}">{{languageName .Language}} ({{.Language}}): {{.Status}}</span>
                       {{end}}
                     </span>
                   </button>
@@ -68,17 +68,17 @@
 
 {{$settingsForm := .Form.For "settings"}}
 <dialog id="workspace-settings-modal" class="modal" {{if $settingsForm.Panel}}data-open-on-render{{end}}>
-  <div class="modal-box overflow-x-hidden">
-    <h2 class="font-bold text-lg">Workspace settings</h2>
+  <div class="modal-box overflow-x-hidden border border-base-300">
+    <h2 class="text-subhead">Workspace settings</h2>
     <form hx-post="/settings/target-languages" hx-target="#app" hx-swap="innerHTML" class="flex flex-col gap-2">
       {{template "form-problem" $settingsForm.Problem}}
-      <fieldset class="fieldset min-w-0"><legend class="fieldset-legend">Target Languages</legend>
+      <fieldset class="fieldset min-w-0"><legend class="fieldset-legend text-control">Target Languages</legend>
         <select name="languages" multiple class="select w-full min-w-0 language-select" data-testid="target-languages">
           {{range .Languages}}<option value="{{.Tag}}" {{if hasTag $.TargetLanguages .Tag}}selected{{end}}>{{.Name}} ({{.Tag}})</option>{{end}}
         </select>
-        <p class="label">Removing a language preserves existing Translation Targets, but prevents creating new ones.</p>
+        <p class="text-micro text-base-content/60">Removing a language preserves existing Translation Targets, but prevents creating new ones.</p>
       </fieldset>
-      <div class="modal-action"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary" type="submit">Save Target Languages</button></div>
+      <div class="modal-action"><button class="btn rounded-selector px-4" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary rounded-selector px-4" type="submit">Save Target Languages</button></div>
     </form>
   </div>
 </dialog>
@@ -94,24 +94,24 @@
 {{$bookForm := .Form.For "book"}}
 {{$seriesForm := .Form.For "series"}}
 <dialog id="add-book-modal" class="modal" {{if $bookForm.Panel}}data-open-on-render{{end}}>
-  <div class="modal-box">
-    <h2 class="font-bold text-lg">Add a Book</h2>
+  <div class="modal-box border border-base-300">
+    <h2 class="text-subhead">Add a Book</h2>
       <form class="flex flex-col gap-2"
             hx-post="/books"
             hx-target="#app"
             hx-swap="innerHTML">
         {{template "form-problem" $bookForm.Problem}}
         <fieldset class="fieldset">
-          <legend class="fieldset-legend">Book Code</legend>
+          <legend class="fieldset-legend text-control">Book Code</legend>
           <input name="code" required class="input w-full" placeholder="memoirs"
                  value="{{$bookForm.Code}}">
-          <p class="label">
+          <p class="text-micro text-base-content/60">
             Letters, digits, hyphens and underscores. This names the Book's
             folder on disk.
           </p>
         </fieldset>
         <fieldset class="fieldset">
-          <legend class="fieldset-legend">Series</legend>
+          <legend class="fieldset-legend text-control">Series</legend>
           <select name="series" class="select w-full">
             <option value="">On its own</option>
             {{range .Library.Series}}
@@ -122,9 +122,9 @@
           </select>
         </fieldset>
         <fieldset class="fieldset">
-          <legend class="fieldset-legend">Source language</legend>
+          <legend class="fieldset-legend text-control">Source language</legend>
           <select name="language" class="select w-full language-select" id="book-source-language"><option value="">Choose a Source Language</option>{{range .Languages}}<option value="{{.Tag}}" {{if eq $bookForm.Language .Tag}}selected{{end}}>{{.Name}} ({{.Tag}})</option>{{end}}</select>
-          <p class="label">
+          <p class="text-micro text-base-content/60">
             Only for a Book on its own. A Book joining a Series takes the
             Series' source language.
           </p>
@@ -135,39 +135,39 @@
           left empty for the upload to fill in otherwise.
         */}}
         <fieldset class="fieldset">
-          <legend class="fieldset-legend">Title <span class="opacity-50">(optional)</span></legend>
+          <legend class="fieldset-legend text-control">Title <span class="text-base-content/50">(optional)</span></legend>
           <input name="title" class="input w-full" value="{{$bookForm.Title}}">
-          <p class="label">Read from the file you upload, if you leave it empty.</p>
+          <p class="text-micro text-base-content/60">Read from the file you upload, if you leave it empty.</p>
         </fieldset>
         <fieldset class="fieldset">
-          <legend class="fieldset-legend">Author <span class="opacity-50">(optional)</span></legend>
+          <legend class="fieldset-legend text-control">Author <span class="text-base-content/50">(optional)</span></legend>
           <input name="author" class="input w-full" value="{{$bookForm.Author}}">
         </fieldset>
-        <div class="modal-action"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary" type="submit">Add Book</button></div>
+        <div class="modal-action"><button class="btn rounded-selector px-4" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary rounded-selector px-4" type="submit">Add Book</button></div>
       </form>
   </div>
 </dialog>
 
 <dialog id="add-series-modal" class="modal" {{if $seriesForm.Panel}}data-open-on-render{{end}}>
-  <div class="modal-box">
-    <h2 class="font-bold text-lg">Add Series</h2>
+  <div class="modal-box border border-base-300">
+    <h2 class="text-subhead">Add Series</h2>
       <form class="flex flex-col gap-2"
             hx-post="/series"
             hx-target="#app"
             hx-swap="innerHTML">
         {{template "form-problem" $seriesForm.Problem}}
         <fieldset class="fieldset">
-          <legend class="fieldset-legend">Name</legend>
+          <legend class="fieldset-legend text-control">Name</legend>
           <input name="name" required class="input w-full"
                  placeholder="The Adventures of Sherlock Holmes"
                  value="{{$seriesForm.Name}}">
         </fieldset>
         <fieldset class="fieldset">
-          <legend class="fieldset-legend">Source language</legend>
+          <legend class="fieldset-legend text-control">Source language</legend>
           <select name="language" required class="select w-full language-select"><option value="">Choose a Source Language</option>{{range .Languages}}<option value="{{.Tag}}" {{if eq $seriesForm.Language .Tag}}selected{{end}}>{{.Name}} ({{.Tag}})</option>{{end}}</select>
-          <p class="label">Set once here; every Book in the Series inherits it.</p>
+          <p class="text-micro text-base-content/60">Set once here; every Book in the Series inherits it.</p>
         </fieldset>
-        <div class="modal-action"><button class="btn" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary" type="submit">Create Series</button></div>
+        <div class="modal-action"><button class="btn rounded-selector px-4" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-primary rounded-selector px-4" type="submit">Create Series</button></div>
       </form>
   </div>
 </dialog>
@@ -175,7 +175,7 @@
 
 {{define "form-problem"}}
 {{with .}}
-<div role="alert" data-testid="form-problem" class="alert alert-warning text-left">
+<div role="alert" data-testid="form-problem" class="alert alert-warning alert-soft rounded-box text-left text-control">
   <span>{{.}}</span>
 </div>
 {{end}}
@@ -190,9 +190,9 @@
 {{end}}
 
 {{define "book-detail-empty"}}
-<div class="card bg-base-100 shadow-sm">
+<div class="card border border-base-300 bg-base-100">
   <div class="card-body">
-    <p class="opacity-60">Select a Book to see its Translation Targets.</p>
+    <p class="text-body text-base-content/60">Select a Book to see its Translation Targets.</p>
   </div>
 </div>
 {{end}}
