@@ -43,6 +43,9 @@ func TestTranslatorProducesAStructurallyIdenticalFB2FromPersistedChunks(t *testi
 		responses = append(responses, agent.Response{Result: SerializeNodes(translated), Cost: 0.01})
 	}
 	fake := agent.NewFake(responses...)
+	if _, err := (Translator{Root: fixture.root, ChunkWordBudget: 5000}).PrepareTextChunks(fixture.series.Code, "adventures"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
 
 	outputPath, err := (Translator{
 		Root:             fixture.root,
@@ -144,6 +147,9 @@ func TestTranslatorSendsSerialChapterBoundedRequestsAndRecordsProgress(t *testin
 		t.Fatalf("parse TXT fixture: %v", err)
 	}
 	chunks := ChunkNodes(document.Nodes, 4)
+	if _, err := (Translator{Root: fixture.root, ChunkWordBudget: 4}).PrepareTextChunks(fixture.series.Code, "solaris"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
 	responses := make([]agent.Response, 0, len(chunks))
 	for _, chunk := range chunks {
 		translated := make([]format.TextNode, len(chunk.Nodes))
@@ -296,7 +302,13 @@ func TestTranslatorSendsSerialChapterBoundedRequestsAndRecordsProgress(t *testin
 func TestTranslatorHandlesTXTWithoutDetectableChapters(t *testing.T) {
 	source := []byte("First ordinary paragraph.\n\nSecond ordinary paragraph.")
 	fixture := newReadyTarget(t, "Notes", "en", "notes", "uk", "notes.txt", source)
-	fake := agent.NewFake(agent.Response{Result: "[[NODE 0]]\nПерший абзац.\n[[/NODE]]\n[[NODE 1]]\nДругий абзац.\n[[/NODE]]"})
+	if _, err := (Translator{Root: fixture.root, ChunkWordBudget: 1}).PrepareTextChunks(fixture.series.Code, "notes"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	fake := agent.NewFake(
+		agent.Response{Result: "[[NODE 0]]\nПерший абзац.\n[[/NODE]]"},
+		agent.Response{Result: "[[NODE 1]]\nДругий абзац.\n[[/NODE]]"},
+	)
 
 	outputPath, err := (Translator{
 		Root: fixture.root, Agent: fake, TranslationModel: "strong", ChunkWordBudget: 100,
@@ -311,14 +323,17 @@ func TestTranslatorHandlesTXTWithoutDetectableChapters(t *testing.T) {
 	if want := "Перший абзац.\n\nДругий абзац."; string(output) != want {
 		t.Errorf("translated TXT = %q, want %q", output, want)
 	}
-	if got := len(fake.RecordedRequests()); got != 1 {
-		t.Errorf("requests = %d, want one fallback-Chapter Chunk", got)
+	if got := len(fake.RecordedRequests()); got != 2 {
+		t.Errorf("requests = %d, want the two persisted Chunks (without rechunking)", got)
 	}
 }
 
 func TestTranslatorPersistsAcceptedChunkBeforeMarkingItCompleted(t *testing.T) {
 	source := []byte("A single source Text Node.")
 	fixture := newReadyTarget(t, "Interrupted", "en", "interrupted", "uk", "interrupted.txt", source)
+	if _, err := (Translator{Root: fixture.root}).PrepareTextChunks(fixture.series.Code, "interrupted"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
 	targetDirectory := filepath.Join(fixture.root, fixture.series.Code, library.BooksDir, "interrupted", library.TranslationsDir, "en-to-uk")
 	statePath := filepath.Join(targetDirectory, library.StateFile)
 	fake := agent.NewFake(agent.Response{Result: "[[NODE 0]]\nПереклад.\n[[/NODE]]"})

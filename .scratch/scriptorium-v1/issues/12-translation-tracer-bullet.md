@@ -43,3 +43,12 @@ persists accepted Chunk Translations, and composes the final Book only from
 those persisted artifacts. A real Sherlock Holmes FB2 integration test proves
 structural fidelity and an unchanged Source File; focused tests cover prompt
 ordering, Dictionary override, state, and chapterless TXT. `make check` passes.
+
+2026-09-01: Added explicit UI actions for Agent-free **Prepare Text Chunks**
+and **Start Translation**. Start performs a cheap manifest/original-file
+preflight and refuses to invoke the Agent when preparation is absent; the
+translation service loads the persisted materialization without rechunking.
+Translation Target actions now render as a vertical multiline block. Focused
+UI tests cover preparation, the cheap refusal, asynchronous start, and layout.
+The headless twin served successfully on loopback; HTTP verification confirmed
+the shared UI renders and `make check` passes.

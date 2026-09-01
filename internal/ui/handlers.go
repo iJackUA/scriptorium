@@ -84,6 +84,8 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("DELETE /series/{series}/books/{book}/targets/{target}", s.deleteTarget)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary", s.startDictionaryBuilding)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/stop", s.stopDictionaryBuilding)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/chunks", s.prepareTextChunks)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/translate", s.startTranslation)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary.tsv", s.bookDictionaryTSV)
 	mux.HandleFunc("GET /series/{series}/dictionaries/{target}", s.seriesDictionaryTSV)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary/review", s.dictionaryReview)
@@ -311,6 +313,95 @@ func (s screens) deleteTarget(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.bookDetail(w, r)
+}
+
+func (s screens) prepareTextChunks(w http.ResponseWriter, r *http.Request) {
+	_, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	ws, ok := s.session.Current()
+	if !ok {
+		s.reply(w, r, form{})
+		return
+	}
+	translator := translation.Translator{Root: ws.Root}
+	count, err := translator.PrepareTextChunks(r.PathValue("series"), r.PathValue("book"))
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	s.detailNotice(w, r, fmt.Sprintf("Prepared %d Text Chunks.", count))
+}
+
+func (s screens) startTranslation(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	ws, ok := s.session.Current()
+	if !ok {
+		s.reply(w, r, form{})
+		return
+	}
+	seriesCode, bookCode, targetLanguage := r.PathValue("series"), r.PathValue("book"), r.PathValue("target")
+	lib, err := store.Library()
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	series, book, found := lib.Book(seriesCode, bookCode)
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	var target library.TranslationTarget
+	for _, candidate := range book.Targets {
+		if candidate.Language == targetLanguage {
+			target = candidate
+			break
+		}
+	}
+	if target.Language == "" || target.Status != library.StatusDictionaryReady {
+		s.detail(w, r, "translation can only start when the Dictionary is ready")
+		return
+	}
+	translator := translation.Translator{Root: ws.Root}
+	prepared, err := translator.PreparedTextChunksPresent(seriesCode, bookCode)
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	if !prepared {
+		s.detail(w, r, "prepare Text Chunks before starting translation")
+		return
+	}
+	go s.translateBook(ws, series, book, targetLanguage)
+	s.bookDetail(w, r)
+}
+
+func (s screens) translateBook(ws workspace.Workspace, series library.Series, book library.Book, targetLanguage string) {
+	transcript, err := agent.NewFileLogger(filepath.Join(ws.Root, "logs", "agent-transcript.jsonl"))
+	if err != nil {
+		log.Printf("translation for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
+		return
+	}
+	client, err := s.agents(ws.Config.Agent, transcript)
+	if err != nil {
+		log.Printf("translation for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
+		return
+	}
+	_, err = (translation.Translator{
+		Root:             ws.Root,
+		Agent:            client,
+		TranslationModel: ws.Config.Models.Translation,
+	}).Translate(context.Background(), series.Code, book.Code, targetLanguage)
+	if err != nil {
+		log.Printf("translation for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
+		if statusErr := library.NewStore(ws.Root).SetTranslationTargetStatus(series.Code, book.Code, targetLanguage, library.StatusFailed); statusErr != nil {
+			log.Printf("record translation failure: %v", statusErr)
+		}
+	}
 }
 
 func (s screens) startDictionaryBuilding(w http.ResponseWriter, r *http.Request) {
@@ -601,6 +692,14 @@ func (s screens) dictionaryProgress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s screens) detail(w http.ResponseWriter, r *http.Request, problem string) {
+	s.renderDetail(w, r, problem, "")
+}
+
+func (s screens) detailNotice(w http.ResponseWriter, r *http.Request, notice string) {
+	s.renderDetail(w, r, "", notice)
+}
+
+func (s screens) renderDetail(w http.ResponseWriter, r *http.Request, problem, notice string) {
 	store, ok := s.current()
 	if !ok {
 		s.reply(w, r, form{})
@@ -616,7 +715,9 @@ func (s screens) detail(w http.ResponseWriter, r *http.Request, problem string) 
 		http.NotFound(w, r)
 		return
 	}
-	fragment(w, "book-detail", s.bookDetailData(series, book, problem))
+	data := s.bookDetailData(series, book, problem)
+	data.Notice = notice
+	fragment(w, "book-detail", data)
 }
 
 type bookDetailData struct {
@@ -625,6 +726,8 @@ type bookDetailData struct {
 	Allowed      []targetOption
 	Progress     map[string]translation.DictionaryProgress
 	Dictionaries map[string]dictionaryReview
+	Prepared     map[string]bool
+	Notice       string
 	Problem      string
 }
 
@@ -663,7 +766,12 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 	existing := make(map[string]library.Status, len(book.Targets))
 	progress := make(map[string]translation.DictionaryProgress, len(book.Targets))
 	dictionaries := make(map[string]dictionaryReview, len(book.Targets))
+	prepared := make(map[string]bool, len(book.Targets))
+	translator := translation.Translator{Root: ws.Root}
 	for _, target := range book.Targets {
+		if ready, err := translator.PreparedTextChunksPresent(series.Code, book.Code); err == nil {
+			prepared[target.Language] = ready
+		}
 		existing[target.Language] = target.Status
 		if target.Status != library.StatusNew && target.Status != library.StatusAnalyzing {
 			store, ok := s.current()
@@ -680,7 +788,7 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 			allowed = append(allowed, targetOption{Language: language, Status: existing[tag]})
 		}
 	}
-	return bookDetailData{Series: series, Book: book, Allowed: allowed, Progress: progress, Dictionaries: dictionaries, Problem: problem}
+	return bookDetailData{Series: series, Book: book, Allowed: allowed, Progress: progress, Dictionaries: dictionaries, Prepared: prepared, Problem: problem}
 }
 
 func (s screens) reviewDictionary(store library.Store, series library.Series, book library.Book, targetLanguage string) dictionaryReview {

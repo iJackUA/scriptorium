@@ -3,6 +3,7 @@
   <div class="card-body gap-4">
     <h2 class="card-title text-title">{{.Book.Label}}</h2>
     {{template "form-problem" .Problem}}
+    {{if .Notice}}<p class="text-success text-control" role="status">{{.Notice}}</p>{{end}}
     {{with .Book.Author}}<p class="text-control text-base-content/60 -mt-2">{{.}}</p>{{end}}
     <dl class="text-control grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5">
       <dt class="text-base-content/50">Book Code</dt><dd><code>{{.Book.Code}}</code></dd>
@@ -38,14 +39,20 @@
       <ul class="flex flex-col gap-2">
         {{range .Book.Targets}}
           {{$language := .Language}}
-          <li class="flex flex-wrap items-center gap-2 rounded-field border border-base-300 px-4 py-2.5">
-            <span class="text-control font-semibold">{{languageName .Language}} ({{.Language}})</span>
-            <span class="badge badge-sm badge-soft text-micro {{template "status-class" .Status}}">{{.Status}}</span>
-            <span class="grow"></span>
-            {{if eq .Status "New"}}<button class="btn btn-primary btn-xs rounded-selector px-3" hx-post="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{.Language}}/dictionary" hx-target="#book-detail" hx-swap="innerHTML">Start Dictionary Building</button>{{end}}
-            {{if eq .Status "Analyzing"}}<button class="btn btn-warning btn-soft btn-xs rounded-selector px-3" hx-post="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{.Language}}/dictionary/stop" hx-target="#book-detail" hx-swap="innerHTML">Stop Dictionary Building</button>{{with index $.Progress .Language}}<span id="dictionary-progress-{{$language}}" class="text-micro text-base-content/60" data-testid="dictionary-progress" aria-live="polite" hx-get="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{$language}}/dictionary-progress" hx-trigger="every 1s" hx-swap="outerHTML">Analyzing Chunk {{.Active}}/{{.Total}} ({{.Completed}} complete)</span>{{end}}{{end}}
-            {{with index $.Dictionaries .Language}}<button class="btn btn-ghost btn-xs rounded-selector px-3" type="button" onclick="document.getElementById('dictionary-modal-{{$language}}').showModal()">Manage Dictionary</button>{{end}}
-            <button class="btn btn-error btn-soft btn-xs rounded-selector px-3" type="button" onclick="this.nextElementSibling.showModal()">Delete</button>
+          <li class="rounded-field border border-base-300 px-4 py-3">
+            <div class="flex items-center gap-2">
+              <span class="text-control font-semibold">{{languageName .Language}} ({{.Language}})</span>
+              <span class="badge badge-sm badge-soft text-micro {{template "status-class" .Status}}">{{.Status}}</span>
+            </div>
+            <div class="mt-3 flex flex-col items-start gap-2">
+              {{if index $.Prepared .Language}}<span class="text-micro text-success">Text Chunks prepared</span>{{end}}
+              {{if $.Book.SourceFile}}<div><button class="btn btn-secondary btn-soft btn-xs rounded-selector px-3" hx-post="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{.Language}}/chunks" hx-target="#book-detail" hx-swap="innerHTML">Prepare Text Chunks</button></div>{{end}}
+              {{if eq .Status "New"}}<div><button class="btn btn-primary btn-xs rounded-selector px-3" hx-post="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{.Language}}/dictionary" hx-target="#book-detail" hx-swap="innerHTML">Start Dictionary Building</button></div>{{end}}
+              {{if eq .Status "Dictionary Ready"}}<div><button class="btn btn-primary btn-xs rounded-selector px-3" hx-post="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{.Language}}/translate" hx-target="#book-detail" hx-swap="innerHTML">Start Translation</button></div>{{end}}
+              {{if eq .Status "Analyzing"}}<div><button class="btn btn-warning btn-soft btn-xs rounded-selector px-3" hx-post="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{.Language}}/dictionary/stop" hx-target="#book-detail" hx-swap="innerHTML">Stop Dictionary Building</button></div>{{with index $.Progress .Language}}<div><span id="dictionary-progress-{{$language}}" class="text-micro text-base-content/60" data-testid="dictionary-progress" aria-live="polite" hx-get="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{$language}}/dictionary-progress" hx-trigger="every 1s" hx-swap="outerHTML">Analyzing Chunk {{.Active}}/{{.Total}} ({{.Completed}} complete)</span></div>{{end}}{{end}}
+              {{with index $.Dictionaries .Language}}<div><button class="btn btn-ghost btn-xs rounded-selector px-3" type="button" onclick="document.getElementById('dictionary-modal-{{$language}}').showModal()">Manage Dictionary</button></div>{{end}}
+              <div><button class="btn btn-error btn-soft btn-xs rounded-selector px-3" type="button" onclick="this.nextElementSibling.showModal()">Delete</button></div>
+            </div>
             <dialog class="modal"><div class="modal-box border border-base-300"><p class="text-body">Delete this Translation Target?</p><div class="modal-action"><form method="dialog"><button class="btn rounded-selector px-4">Cancel</button></form><button class="btn btn-error rounded-selector px-4" hx-delete="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{.Language}}" hx-target="#book-detail" hx-swap="innerHTML">Delete</button></div></div></dialog>
           </li>
           {{with index $.Dictionaries .Language}}

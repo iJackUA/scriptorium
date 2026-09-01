@@ -310,6 +310,114 @@ func TestNewTranslationTargetWithASourceFileOffersDictionaryBuilding(t *testing.
 	}
 }
 
+func TestPrepareTextChunksActionPersistsBookChunks(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Solaris", "en")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "solaris"})
+	if err := store.UploadSourceFile(series.Code, "solaris", "solaris.txt", strings.NewReader("First paragraph.\n\nSecond paragraph."), false); err != nil {
+		t.Fatalf("UploadSourceFile: %v", err)
+	}
+	if _, err := store.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"}); err != nil {
+		t.Fatalf("CreateTranslationTarget: %v", err)
+	}
+	s := newTestServerFor(t, sessionFor(t, root))
+
+	rec := postForm(s, "/series/solaris/books/solaris/targets/uk/chunks", url.Values{})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Prepared 1 Text Chunks.") {
+		t.Fatalf("Prepare Text Chunks response = %d\n%s", rec.Code, rec.Body.String())
+	}
+	for _, path := range []string{
+		filepath.Join(root, "solaris", "books", "solaris", "chunks", "manifest.json"),
+		filepath.Join(root, "solaris", "books", "solaris", "chunks", "original", "0.txt"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("prepared artifact %s is missing: %v", path, err)
+		}
+	}
+	body := serve(s, request(s, "/series/solaris/books/solaris")).Body.String()
+	for _, want := range []string{"Prepare Text Chunks", "Text Chunks prepared", "Start Dictionary Building"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Book panel is missing %q:\n%s", want, body)
+		}
+	}
+	if !strings.Contains(body, "flex flex-col items-start gap-2") {
+		t.Error("Translation Target actions are not laid out as a vertical block")
+	}
+}
+
+func TestStartTranslationRefusesToRunWithoutPreparedChunks(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Solaris", "en")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "solaris"})
+	if err := store.UploadSourceFile(series.Code, "solaris", "solaris.txt", strings.NewReader("Source."), false); err != nil {
+		t.Fatalf("UploadSourceFile: %v", err)
+	}
+	if _, err := store.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"}); err != nil {
+		t.Fatalf("CreateTranslationTarget: %v", err)
+	}
+	if err := store.SetTranslationTargetStatus(series.Code, "solaris", "uk", library.StatusDictionaryReady); err != nil {
+		t.Fatalf("SetTranslationTargetStatus: %v", err)
+	}
+	fake := agent.NewFake(agent.Response{Result: "[[NODE 0]]\nПереклад.\n[[/NODE]]"})
+	s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return fake, nil })
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	rec := postForm(s, "/series/solaris/books/solaris/targets/uk/translate", url.Values{})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "prepare Text Chunks before starting translation") {
+		t.Fatalf("Start Translation response = %d\n%s", rec.Code, rec.Body.String())
+	}
+	if got := len(fake.RecordedRequests()); got != 0 {
+		t.Fatalf("Agent requests = %d, want no request without prepared Chunks", got)
+	}
+}
+
+func TestStartTranslationActionRunsPreparedBook(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Solaris", "en")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "solaris"})
+	if err := store.UploadSourceFile(series.Code, "solaris", "solaris.txt", strings.NewReader("Source."), false); err != nil {
+		t.Fatalf("UploadSourceFile: %v", err)
+	}
+	if _, err := store.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"}); err != nil {
+		t.Fatalf("CreateTranslationTarget: %v", err)
+	}
+	if err := store.SetTranslationTargetStatus(series.Code, "solaris", "uk", library.StatusDictionaryReady); err != nil {
+		t.Fatalf("SetTranslationTargetStatus: %v", err)
+	}
+	if _, err := (translation.Translator{Root: root, ChunkWordBudget: 10}).PrepareTextChunks(series.Code, "solaris"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	fake := agent.NewFake(agent.Response{Result: "[[NODE 0]]\nПереклад.\n[[/NODE]]"})
+	s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return fake, nil })
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	path := "/series/solaris/books/solaris/targets/uk/translate"
+	if rec := postForm(s, path, url.Values{}); rec.Code != http.StatusOK {
+		t.Fatalf("Start Translation response = %d", rec.Code)
+	}
+	outputPath := filepath.Join(root, "solaris", "books", "solaris", "translations", "en-to-uk", "out", "solaris.uk.txt")
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(outputPath); err == nil {
+			break
+		}
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("Start Translation did not produce output: %v", err)
+	}
+	if got := len(fake.RecordedRequests()); got != 1 {
+		t.Errorf("Agent requests = %d, want one prepared Chunk", got)
+	}
+}
+
 func TestDictionaryBuildingShowsTheActiveChunkAndRefreshesIt(t *testing.T) {
 	body, err := execute("book-detail", bookDetailData{
 		Series: library.Series{Code: "holmes", Name: "Holmes", SourceLanguage: "en"},

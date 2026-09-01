@@ -48,6 +48,11 @@ type materializationManifest struct {
 	Chunks            []manifestChunk   `json:"chunks"`
 }
 
+type preparedMaterialization struct {
+	manifest materializationManifest
+	chunks   []Chunk
+}
+
 type manifestChapter struct {
 	Index     int   `json:"index"`
 	Parent    int   `json:"parent"`
@@ -91,8 +96,54 @@ const (
 	chunkCompleted chunkStatus = "completed"
 )
 
-// Translate materializes, translates, persists, and composes one Translation
-// Target. It returns the final output path.
+// PrepareTextChunks parses and chunks a Book's Source File, then persists the
+// numbered original Chunk artifacts and manifest. It never invokes an Agent.
+func (t Translator) PrepareTextChunks(seriesCode, bookCode string) (int, error) {
+	store := library.NewStore(t.Root)
+	source, sourceName, err := store.SourceFile(seriesCode, bookCode)
+	if err != nil {
+		return 0, err
+	}
+	document, err := parseSource(sourceName, source)
+	if err != nil {
+		return 0, err
+	}
+	chunks := ChunkNodes(document.TextNodes(), t.ChunkWordBudget)
+	bookDirectory := filepath.Join(t.Root, seriesCode, library.BooksDir, bookCode)
+	if _, err := materializeChunks(bookDirectory, sourceName, source, document.ChaptersList(), chunks); err != nil {
+		return 0, err
+	}
+	return len(chunks), nil
+}
+
+// PreparedTextChunksPresent performs the cheap preflight used by the UI. It
+// checks only for a manifest and at least one original Chunk file; it does not
+// parse or rechunk the Source File.
+func (t Translator) PreparedTextChunksPresent(seriesCode, bookCode string) (bool, error) {
+	bookDirectory := filepath.Join(t.Root, seriesCode, library.BooksDir, bookCode)
+	if _, err := os.Stat(filepath.Join(bookDirectory, chunksDirectory, manifestFile)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, nil
+		}
+		return false, fmt.Errorf("check Chunk Materialization: %w", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(bookDirectory, chunksDirectory, originalChunksDirectory))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check original Chunks: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".txt") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Translate loads a prepared materialization, translates, persists, and
+// composes one Translation Target. It returns the final output path.
 func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetLanguage string) (string, error) {
 	if t.Agent == nil {
 		return "", errors.New("translation needs an Agent")
@@ -113,7 +164,6 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 	if err != nil {
 		return "", err
 	}
-	chunks := ChunkNodes(document.TextNodes(), t.ChunkWordBudget)
 	dictionary, err := store.Dictionary(seriesCode, bookCode, targetLanguage)
 	if err != nil {
 		return "", err
@@ -121,11 +171,12 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 
 	bookDirectory := filepath.Join(t.Root, seriesCode, library.BooksDir, bookCode)
 	targetDirectory := filepath.Join(bookDirectory, library.TranslationsDir, languagePair(series.SourceLanguage, target.Language))
-	manifest, err := materializeChunks(bookDirectory, sourceName, source, document.ChaptersList(), chunks)
+	manifest, err := loadPreparedMaterialization(bookDirectory, sourceName, source, document)
 	if err != nil {
 		return "", err
 	}
-	state, err := newTranslationState(sourceName, source, dictionary, manifest.Chunks)
+	chunks := manifest.chunks
+	state, err := newTranslationState(sourceName, source, dictionary, manifest.manifest.Chunks)
 	if err != nil {
 		return "", err
 	}
@@ -257,6 +308,67 @@ func materializeChunks(bookDirectory, sourceName string, source []byte, chapters
 		return materializationManifest{}, err
 	}
 	return manifest, nil
+}
+
+func loadPreparedMaterialization(bookDirectory, sourceName string, source []byte, document format.Document) (preparedMaterialization, error) {
+	manifestPath := filepath.Join(bookDirectory, chunksDirectory, manifestFile)
+	body, err := os.ReadFile(manifestPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return preparedMaterialization{}, errors.New("prepare Text Chunks before starting translation")
+	}
+	if err != nil {
+		return preparedMaterialization{}, fmt.Errorf("read Chunk Materialization manifest: %w", err)
+	}
+	var manifest materializationManifest
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return preparedMaterialization{}, fmt.Errorf("decode Chunk Materialization manifest: %w", err)
+	}
+	if manifest.SourceFile != sourceName || manifest.SourceFingerprint != fingerprint(source) {
+		return preparedMaterialization{}, errors.New("prepared Text Chunks belong to a different Source File; prepare them again")
+	}
+	sourceNodes := make(map[int]format.TextNode, len(document.TextNodes()))
+	for _, node := range document.TextNodes() {
+		sourceNodes[node.Index] = node
+	}
+	chunks := make([]Chunk, 0, len(manifest.Chunks))
+	seenNodes := make(map[int]bool, len(sourceNodes))
+	for position, entry := range manifest.Chunks {
+		if entry.Index != position || len(entry.TextNodes) == 0 {
+			return preparedMaterialization{}, fmt.Errorf("Chunk Materialization manifest has invalid Chunk %d", position)
+		}
+		path := filepath.Join(bookDirectory, chunksDirectory, originalChunksDirectory, chunkFileName(entry.Index))
+		chunkBody, err := os.ReadFile(path)
+		if err != nil {
+			return preparedMaterialization{}, fmt.Errorf("read original Chunk %d: %w", entry.Index, err)
+		}
+		if fingerprint(chunkBody) != entry.SourceHash {
+			return preparedMaterialization{}, fmt.Errorf("original Chunk %d has changed; prepare Text Chunks again", entry.Index)
+		}
+		parsed, err := parseNumberedNodes(string(chunkBody))
+		if err != nil || len(parsed) != len(entry.TextNodes) {
+			return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: invalid numbered Text Nodes", entry.Index)
+		}
+		chunkNodes := make([]format.TextNode, len(parsed))
+		for nodePosition, parsedNode := range parsed {
+			if parsedNode.Index != entry.TextNodes[nodePosition] || seenNodes[parsedNode.Index] {
+				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: invalid Text Node index %d", entry.Index, parsedNode.Index)
+			}
+			original, ok := sourceNodes[parsedNode.Index]
+			if !ok || parsedNode.Text != original.Text {
+				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: Text Node %d does not match the Source File", entry.Index, parsedNode.Index)
+			}
+			if entry.Chapter != original.Chapter {
+				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: Chapter boundary changed", entry.Index)
+			}
+			seenNodes[parsedNode.Index] = true
+			chunkNodes[nodePosition] = original
+		}
+		chunks = append(chunks, Chunk{Index: entry.Index, Chapter: entry.Chapter, Nodes: chunkNodes})
+	}
+	if len(seenNodes) != len(sourceNodes) {
+		return preparedMaterialization{}, errors.New("prepared Text Chunks do not cover the Source File; prepare them again")
+	}
+	return preparedMaterialization{manifest: manifest, chunks: chunks}, nil
 }
 
 func newTranslationState(sourceName string, source []byte, dictionary []library.Term, chunks []manifestChunk) (translationState, error) {
