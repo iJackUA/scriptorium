@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -115,6 +116,99 @@ func TestDictionaryBuildingStateAndDictionaryArePersistedPerTranslationTarget(t 
 	}
 	if got := lib.Series[0].Books[0].Targets[0].Status; got != StatusDictionaryReady {
 		t.Errorf("Status = %q, want %q", got, StatusDictionaryReady)
+	}
+}
+
+func TestMergedDictionaryLetsTheBookOverrideTheSeries(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	_, _ = s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	if err := s.WriteSeriesDictionary(series.Code, "uk", []Term{{Original: "Solaris", Translation: "Солярис"}, {Original: "Rheya", Translation: "Рея"}}); err != nil {
+		t.Fatalf("WriteSeriesDictionary: %v", err)
+	}
+	if err := s.WriteDictionary(series.Code, "solaris", "uk", []Term{{Original: "Rheya", Translation: "Реїя"}, {Original: "Sartorius", Translation: "Сарторіус"}}); err != nil {
+		t.Fatalf("WriteDictionary: %v", err)
+	}
+
+	got, err := s.Dictionary(series.Code, "solaris", "uk")
+	if err != nil {
+		t.Fatalf("Dictionary: %v", err)
+	}
+	want := []Term{{Original: "Solaris", Translation: "Солярис"}, {Original: "Rheya", Translation: "Реїя"}, {Original: "Sartorius", Translation: "Сарторіус"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("Dictionary = %#v, want %#v", got, want)
+	}
+}
+
+func TestDictionaryReadsHandEditsAndReportsMalformedLineNumbers(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	_, _ = s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	path := filepath.Join(s.root, series.Code, BooksDir, "solaris", TranslationsDir, "pl-to-uk", DictionaryFile)
+	if err := os.WriteFile(path, []byte("original\ttranslation\tnote\nSolaris\tСолярис\thand edit\n"), 0o644); err != nil {
+		t.Fatalf("write hand edit: %v", err)
+	}
+	got, err := s.BookDictionary(series.Code, "solaris", "uk")
+	if err != nil {
+		t.Fatalf("BookDictionary: %v", err)
+	}
+	if want := []Term{{Original: "Solaris", Translation: "Солярис", Note: "hand edit"}}; !slices.Equal(got, want) {
+		t.Errorf("BookDictionary = %#v, want %#v", got, want)
+	}
+	if err := os.WriteFile(path, []byte("original\ttranslation\tnote\nSolaris\n"), 0o644); err != nil {
+		t.Fatalf("write malformed Dictionary: %v", err)
+	}
+	if _, err := s.BookDictionary(series.Code, "solaris", "uk"); err == nil || !strings.Contains(err.Error(), "line 2") {
+		t.Errorf("BookDictionary error = %v, want line 2", err)
+	}
+}
+
+func TestPromotingABookTermMakesItAvailableToLaterBooks(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris-2"})
+	_, _ = s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	_, _ = s.CreateTranslationTarget(series.Code, "solaris-2", "uk", []string{"uk"})
+	if err := s.WriteDictionary(series.Code, "solaris", "uk", []Term{{Original: "Ocean", Translation: "Океан"}}); err != nil {
+		t.Fatalf("WriteDictionary: %v", err)
+	}
+	if err := s.PromoteDictionaryTerm(series.Code, "solaris", "uk", "Ocean"); err != nil {
+		t.Fatalf("PromoteDictionaryTerm: %v", err)
+	}
+	got, err := s.Dictionary(series.Code, "solaris-2", "uk")
+	if err != nil {
+		t.Fatalf("Dictionary: %v", err)
+	}
+	if want := []Term{{Original: "Ocean", Translation: "Океан"}}; !slices.Equal(got, want) {
+		t.Errorf("Dictionary = %#v, want %#v", got, want)
+	}
+	path := filepath.Join(s.root, series.Code, DictionariesDir, "pl-to-uk.tsv")
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("Series Dictionary is not at %s: %v", path, err)
+	}
+}
+
+func TestWritingDictionaryPreservesHandEditsAndAddsNewTerms(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	_, _ = s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	if err := s.WriteDictionary(series.Code, "solaris", "uk", []Term{{Original: "Solaris", Translation: "ручне"}}); err != nil {
+		t.Fatalf("WriteDictionary: %v", err)
+	}
+	if err := s.WriteDictionary(series.Code, "solaris", "uk", []Term{{Original: "Solaris", Translation: "запропоноване"}, {Original: "Ocean", Translation: "Океан"}}); err != nil {
+		t.Fatalf("WriteDictionary: %v", err)
+	}
+	got, err := s.BookDictionary(series.Code, "solaris", "uk")
+	if err != nil {
+		t.Fatalf("BookDictionary: %v", err)
+	}
+	want := []Term{{Original: "Solaris", Translation: "ручне"}, {Original: "Ocean", Translation: "Океан"}}
+	if !slices.Equal(got, want) {
+		t.Errorf("BookDictionary = %#v, want %#v", got, want)
 	}
 }
 

@@ -41,6 +41,15 @@
           <button class="btn btn-error btn-xs" type="button" onclick="this.nextElementSibling.showModal()">Delete</button>
           <dialog class="modal"><div class="modal-box"><p>Delete this Translation Target?</p><div class="modal-action"><form method="dialog"><button class="btn">Cancel</button></form><button class="btn btn-error" hx-delete="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{.Language}}" hx-target="#book-detail" hx-swap="innerHTML">Delete</button></div></div></dialog>
         </li>
+        {{with index $.Dictionaries .Language}}
+        <li class="rounded-box bg-base-200 p-3 text-sm">
+          <div class="flex gap-3"><a class="link" href="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{$language}}/dictionary.tsv" target="_blank">Book Dictionary</a><a class="link" href="/series/{{$.Series.Code}}/dictionaries/{{$language}}.tsv" target="_blank">Series Dictionary</a></div>
+          {{if .Problem}}<p class="text-error mt-2">{{.Problem}}</p>{{else}}
+          {{if .Warning}}<p class="text-warning mt-2">{{len .Terms}} Terms will bloat every translation request. Prune the Dictionaries.</p>{{end}}
+          {{if .Terms}}<ul class="mt-2 space-y-1">{{range .Terms}}<li class="flex gap-2"><code>{{.Original}} → {{.Translation}}</code><form hx-post="/series/{{$.Series.Code}}/books/{{$.Book.Code}}/targets/{{$language}}/dictionary/promote" hx-target="#book-detail" hx-swap="innerHTML"><input type="hidden" name="term" value="{{.Original}}"><button class="btn btn-xs" type="submit">Promote</button></form></li>{{end}}</ul>{{end}}
+          {{end}}
+        </li>
+        {{end}}
       {{end}}
     </ul>
     {{if .Allowed}}

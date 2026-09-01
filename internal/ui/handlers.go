@@ -84,6 +84,9 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("DELETE /series/{series}/books/{book}/targets/{target}", s.deleteTarget)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary", s.startDictionaryBuilding)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/stop", s.stopDictionaryBuilding)
+	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary.tsv", s.bookDictionaryTSV)
+	mux.HandleFunc("GET /series/{series}/dictionaries/{target}", s.seriesDictionaryTSV)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/promote", s.promoteDictionaryTerm)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary-progress", s.dictionaryProgress)
 	return mux
 }
@@ -369,6 +372,51 @@ func (s screens) stopDictionaryBuilding(w http.ResponseWriter, r *http.Request) 
 	s.bookDetail(w, r)
 }
 
+func (s screens) bookDictionaryTSV(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	body, err := store.BookDictionaryTSV(r.PathValue("series"), r.PathValue("book"), r.PathValue("target"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/tab-separated-values; charset=utf-8")
+	_, _ = w.Write(body)
+}
+
+func (s screens) seriesDictionaryTSV(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	targetLanguage := strings.TrimSuffix(r.PathValue("target"), ".tsv")
+	if targetLanguage == r.PathValue("target") {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := store.SeriesDictionaryTSV(r.PathValue("series"), targetLanguage)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/tab-separated-values; charset=utf-8")
+	_, _ = w.Write(body)
+}
+
+func (s screens) promoteDictionaryTerm(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	if err := store.PromoteDictionaryTerm(r.PathValue("series"), r.PathValue("book"), r.PathValue("target"), r.FormValue("term")); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	s.bookDetail(w, r)
+}
+
 func (s screens) buildDictionary(ctx context.Context, store library.Store, workspaceRoot string, config workspace.Config, series library.Series, book library.Book, targetLanguage, key string, runID uint64) {
 	defer s.dictionaryRuns.clear(key, runID)
 	fail := func(err error) {
@@ -489,11 +537,18 @@ func (s screens) detail(w http.ResponseWriter, r *http.Request, problem string) 
 }
 
 type bookDetailData struct {
-	Series   library.Series
-	Book     library.Book
-	Allowed  []targetOption
-	Progress map[string]translation.DictionaryProgress
-	Problem  string
+	Series       library.Series
+	Book         library.Book
+	Allowed      []targetOption
+	Progress     map[string]translation.DictionaryProgress
+	Dictionaries map[string]dictionaryReview
+	Problem      string
+}
+
+type dictionaryReview struct {
+	Terms   []library.Term
+	Warning bool
+	Problem string
 }
 
 type dictionaryProgressData struct {
@@ -508,8 +563,20 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 	allowed := make([]targetOption, 0, len(ws.Config.Languages))
 	existing := make(map[string]library.Status, len(book.Targets))
 	progress := make(map[string]translation.DictionaryProgress, len(book.Targets))
+	dictionaries := make(map[string]dictionaryReview, len(book.Targets))
 	for _, target := range book.Targets {
 		existing[target.Language] = target.Status
+		if target.Status != library.StatusNew && target.Status != library.StatusAnalyzing {
+			store, ok := s.current()
+			if ok {
+				terms, err := store.Dictionary(series.Code, book.Code, target.Language)
+				review := dictionaryReview{Terms: terms, Warning: len(terms) > 100}
+				if err != nil {
+					review.Problem = err.Error()
+				}
+				dictionaries[target.Language] = review
+			}
+		}
 		if target.Status == library.StatusAnalyzing {
 			progress[target.Language] = s.dictionaryRuns.get(dictionaryKey(series.Code, book.Code, target.Language))
 		}
@@ -519,7 +586,7 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 			allowed = append(allowed, targetOption{Language: language, Status: existing[tag]})
 		}
 	}
-	return bookDetailData{Series: series, Book: book, Allowed: allowed, Progress: progress, Problem: problem}
+	return bookDetailData{Series: series, Book: book, Allowed: allowed, Progress: progress, Dictionaries: dictionaries, Problem: problem}
 }
 
 func dictionaryKey(seriesCode, bookCode, targetLanguage string) string {

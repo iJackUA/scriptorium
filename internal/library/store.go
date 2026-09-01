@@ -30,6 +30,8 @@ const (
 	StateFile = "state.json"
 	// DictionaryFile holds the proposed Dictionary for one Translation Target.
 	DictionaryFile = "dictionary.tsv"
+	// DictionariesDir holds the per-language-pair Dictionaries shared by a Series.
+	DictionariesDir = "dictionaries"
 	// SourceFilePrefix is the filename before a Source File's extension.
 	SourceFilePrefix = "source"
 )
@@ -410,29 +412,199 @@ func (s Store) SetTranslationTargetStatus(seriesCode, bookCode, targetLanguage s
 	return writeAtomic(path, body)
 }
 
-// WriteDictionary writes a proposed Dictionary in the plain TSV format users
-// can inspect and edit before translation begins.
+// WriteDictionary extends a Book Dictionary with proposed Terms without
+// replacing its existing, user-reviewed Terms.
 func (s Store) WriteDictionary(seriesCode, bookCode, targetLanguage string, terms []Term) error {
+	path, err := s.checkedBookDictionaryPath(seriesCode, bookCode, targetLanguage)
+	if err != nil {
+		return err
+	}
+	existing, err := readDictionary(path)
+	if err != nil {
+		return err
+	}
+	return writeDictionary(path, mergeTerms(terms, existing))
+}
+
+// BookDictionary reads a Translation Target's Dictionary directly from disk,
+// so edits made in another editor are visible on the next application read.
+func (s Store) BookDictionary(seriesCode, bookCode, targetLanguage string) ([]Term, error) {
+	path, err := s.checkedBookDictionaryPath(seriesCode, bookCode, targetLanguage)
+	if err != nil {
+		return nil, err
+	}
+	return readDictionary(path)
+}
+
+// BookDictionaryTSV returns the hand-editable TSV exactly as it is stored.
+func (s Store) BookDictionaryTSV(seriesCode, bookCode, targetLanguage string) ([]byte, error) {
+	path, err := s.checkedBookDictionaryPath(seriesCode, bookCode, targetLanguage)
+	if err != nil {
+		return nil, err
+	}
+	return dictionaryTSV(path)
+}
+
+// SeriesDictionary reads the Dictionary shared by a Series for one Language Pair.
+func (s Store) SeriesDictionary(seriesCode, targetLanguage string) ([]Term, error) {
+	series, err := s.series(seriesCode)
+	if err != nil {
+		return nil, err
+	}
+	return readDictionary(s.seriesDictionaryPath(seriesCode, series.SourceLanguage, targetLanguage))
+}
+
+// SeriesDictionaryTSV returns the hand-editable TSV exactly as it is stored.
+func (s Store) SeriesDictionaryTSV(seriesCode, targetLanguage string) ([]byte, error) {
+	series, err := s.series(seriesCode)
+	if err != nil {
+		return nil, err
+	}
+	return dictionaryTSV(s.seriesDictionaryPath(seriesCode, series.SourceLanguage, targetLanguage))
+}
+
+// WriteSeriesDictionary replaces a Series Dictionary with its reviewed Terms.
+func (s Store) WriteSeriesDictionary(seriesCode, targetLanguage string, terms []Term) error {
 	series, err := s.series(seriesCode)
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(s.root, seriesCode, BooksDir, bookCode, TranslationsDir, languagePair(series.SourceLanguage, targetLanguage), DictionaryFile)
+	path := s.seriesDictionaryPath(seriesCode, series.SourceLanguage, targetLanguage)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", DictionariesDir, err)
+	}
+	return writeDictionary(path, terms)
+}
+
+// Dictionary merges the Series and Book Dictionaries, with the Book's Terms
+// taking precedence when both define the same original text.
+func (s Store) Dictionary(seriesCode, bookCode, targetLanguage string) ([]Term, error) {
+	seriesTerms, err := s.SeriesDictionary(seriesCode, targetLanguage)
+	if err != nil {
+		return nil, err
+	}
+	bookTerms, err := s.BookDictionary(seriesCode, bookCode, targetLanguage)
+	if err != nil {
+		return nil, err
+	}
+	return mergeTerms(seriesTerms, bookTerms), nil
+}
+
+// PromoteDictionaryTerm copies one reviewed Book Term into the Series
+// Dictionary, where later Books in the Series inherit it.
+func (s Store) PromoteDictionaryTerm(seriesCode, bookCode, targetLanguage, original string) error {
+	bookTerms, err := s.BookDictionary(seriesCode, bookCode, targetLanguage)
+	if err != nil {
+		return err
+	}
+	for _, term := range bookTerms {
+		if term.Original == original {
+			seriesTerms, err := s.SeriesDictionary(seriesCode, targetLanguage)
+			if err != nil {
+				return err
+			}
+			return s.WriteSeriesDictionary(seriesCode, targetLanguage, mergeTerms(seriesTerms, []Term{term}))
+		}
+	}
+	return fmt.Errorf("Dictionary Term %q is not in Book %q", original, bookCode)
+}
+
+func (s Store) bookDictionaryPath(seriesCode, bookCode, targetLanguage, sourceLanguage string) string {
+	return filepath.Join(s.root, seriesCode, BooksDir, bookCode, TranslationsDir, languagePair(sourceLanguage, targetLanguage), DictionaryFile)
+}
+
+func (s Store) checkedBookDictionaryPath(seriesCode, bookCode, targetLanguage string) (string, error) {
+	series, err := s.series(seriesCode)
+	if err != nil {
+		return "", err
+	}
+	path := s.bookDictionaryPath(seriesCode, bookCode, targetLanguage, series.SourceLanguage)
 	if _, err := os.Stat(filepath.Dir(path)); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("Translation Target %q does not exist", targetLanguage)
+			return "", fmt.Errorf("Translation Target %q does not exist", targetLanguage)
 		}
-		return fmt.Errorf("read Translation Target: %w", err)
+		return "", fmt.Errorf("read Translation Target: %w", err)
 	}
+	return path, nil
+}
+
+func (s Store) seriesDictionaryPath(seriesCode, sourceLanguage, targetLanguage string) string {
+	return filepath.Join(s.root, seriesCode, DictionariesDir, languagePair(sourceLanguage, targetLanguage)+".tsv")
+}
+
+func readDictionary(path string) ([]Term, error) {
+	body, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read Dictionary: %w", err)
+	}
+	var terms []Term
+	for lineNumber, line := range strings.Split(strings.ReplaceAll(string(body), "\r\n", "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		if lineNumber == 0 && slices.Equal(fields, []string{"original", "translation", "note"}) {
+			continue
+		}
+		if len(fields) < 2 || len(fields) > 3 {
+			return nil, fmt.Errorf("read Dictionary: line %d is not TSV original, translation, note", lineNumber+1)
+		}
+		term := Term{Original: strings.TrimSpace(fields[0]), Translation: strings.TrimSpace(fields[1])}
+		if len(fields) == 3 {
+			term.Note = strings.TrimSpace(fields[2])
+		}
+		if term.Original == "" || term.Translation == "" {
+			return nil, fmt.Errorf("read Dictionary: line %d has an empty original or translation", lineNumber+1)
+		}
+		terms = mergeTerms(terms, []Term{term})
+	}
+	return terms, nil
+}
+
+func dictionaryTSV(path string) ([]byte, error) {
+	body, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return []byte("original\ttranslation\tnote\n"), nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read Dictionary: %w", err)
+	}
+	return body, nil
+}
+
+func writeDictionary(path string, terms []Term) error {
 	var body strings.Builder
 	body.WriteString("original\ttranslation\tnote\n")
 	for _, term := range terms {
+		if strings.TrimSpace(term.Original) == "" || strings.TrimSpace(term.Translation) == "" {
+			return errors.New("Dictionary Terms need an original and translation")
+		}
 		if strings.ContainsAny(term.Original+term.Translation+term.Note, "\t\n\r") {
 			return errors.New("Dictionary Terms cannot contain tabs or line breaks")
 		}
 		fmt.Fprintf(&body, "%s\t%s\t%s\n", term.Original, term.Translation, term.Note)
 	}
 	return writeAtomic(path, []byte(body.String()))
+}
+
+func mergeTerms(base, overrides []Term) []Term {
+	terms := append([]Term(nil), base...)
+	positions := make(map[string]int, len(terms))
+	for index, term := range terms {
+		positions[term.Original] = index
+	}
+	for _, term := range overrides {
+		if index, ok := positions[term.Original]; ok {
+			terms[index] = term
+			continue
+		}
+		positions[term.Original] = len(terms)
+		terms = append(terms, term)
+	}
+	return terms
 }
 
 func writeAtomic(path string, body []byte) error {

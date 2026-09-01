@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -392,6 +393,68 @@ func TestDictionaryBuildingWritesAFencedAgentReplyAndReachesDictionaryReady(t *t
 	pathOnDisk := filepath.Join(root, "holmes", "books", "adventures", "translations", "en-to-uk", library.DictionaryFile)
 	if got := read(t, pathOnDisk); !strings.Contains(got, "Holmes\t\u0413\u043e\u043b\u043c\u0441") {
 		t.Errorf("dictionary.tsv = %q, want fenced agent reply to be persisted", got)
+	}
+}
+
+func TestDictionaryReviewOffersPlainTSVAndWarnsWhenTheMergedDictionaryIsLarge(t *testing.T) {
+	s, root := newEmptyLibraryServer(t)
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Solaris", "pl")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "solaris"})
+	_, _ = store.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	terms := make([]library.Term, 101)
+	for index := range terms {
+		terms[index] = library.Term{Original: fmt.Sprintf("term-%d", index), Translation: fmt.Sprintf("переклад-%d", index)}
+	}
+	if err := store.WriteDictionary(series.Code, "solaris", "uk", terms); err != nil {
+		t.Fatalf("WriteDictionary: %v", err)
+	}
+	if err := store.SetTranslationTargetStatus(series.Code, "solaris", "uk", library.StatusDictionaryReady); err != nil {
+		t.Fatalf("SetTranslationTargetStatus: %v", err)
+	}
+
+	body := serve(s, request(s, "/series/solaris/books/solaris")).Body.String()
+	for _, want := range []string{"Book Dictionary", "Series Dictionary", "101 Terms will bloat every translation request"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("Dictionary review does not show %q:\n%s", want, body)
+		}
+	}
+	book := serve(s, request(s, "/series/solaris/books/solaris/targets/uk/dictionary.tsv"))
+	if got := book.Header().Get("Content-Type"); !strings.Contains(got, "text/tab-separated-values") {
+		t.Errorf("book Dictionary Content-Type = %q", got)
+	}
+	if !strings.Contains(book.Body.String(), "term-100\tпереклад-100") {
+		t.Errorf("book Dictionary TSV is missing a reviewed Term: %s", book.Body.String())
+	}
+	seriesTSV := serve(s, request(s, "/series/solaris/dictionaries/uk.tsv"))
+	if got := seriesTSV.Code; got != http.StatusOK {
+		t.Errorf("Series Dictionary status = %d, want %d", got, http.StatusOK)
+	}
+}
+
+func TestPromotingATermFromDictionaryReviewWritesTheSeriesDictionary(t *testing.T) {
+	s, root := newEmptyLibraryServer(t)
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Solaris", "pl")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "solaris"})
+	_, _ = store.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	if err := store.WriteDictionary(series.Code, "solaris", "uk", []library.Term{{Original: "Ocean", Translation: "Океан"}}); err != nil {
+		t.Fatalf("WriteDictionary: %v", err)
+	}
+	if err := store.SetTranslationTargetStatus(series.Code, "solaris", "uk", library.StatusDictionaryReady); err != nil {
+		t.Fatalf("SetTranslationTargetStatus: %v", err)
+	}
+
+	rec := postForm(s, "/series/solaris/books/solaris/targets/uk/dictionary/promote", url.Values{"term": {"Ocean"}})
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "form-problem") {
+		t.Fatalf("promoting Dictionary Term failed: %d\n%s", rec.Code, rec.Body.String())
+	}
+	terms, err := store.SeriesDictionary(series.Code, "uk")
+	if err != nil {
+		t.Fatalf("SeriesDictionary: %v", err)
+	}
+	if len(terms) != 1 || terms[0].Original != "Ocean" {
+		t.Errorf("SeriesDictionary = %#v, want promoted Ocean", terms)
 	}
 }
 

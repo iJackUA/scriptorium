@@ -10,13 +10,17 @@ TSV is deliberate: Dictionaries are hand-edited *and* machine-generated, and a l
 
 **Blocked by:** 10 — Dictionary Building.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The Book Dictionary and the Series Dictionary are both openable as plain TSV from the UI
-- [ ] Hand edits made outside the application are picked up on next read
-- [ ] Merging a Book Dictionary over a Series Dictionary lets the Book entry win on conflict, asserted at the service layer
-- [ ] Series Dictionaries live at `<series-code>/dictionaries/<pair>.tsv`, per language pair
-- [ ] A Term can be promoted from a Book Dictionary to the Series Dictionary, and a later Book in that Series inherits it
-- [ ] Re-running Dictionary Building preserves hand-edited Terms and adds only new ones
-- [ ] A merged Dictionary past roughly 100 Terms shows a warning that it will bloat every request
-- [ ] Malformed TSV lines are reported with their line number rather than silently dropped
+- [x] The Book Dictionary and the Series Dictionary are both openable as plain TSV from the UI
+- [x] Hand edits made outside the application are picked up on next read
+- [x] Merging a Book Dictionary over a Series Dictionary lets the Book entry win on conflict, asserted at the service layer
+- [x] Series Dictionaries live at `<series-code>/dictionaries/<pair>.tsv`, per language pair
+- [x] A Term can be promoted from a Book Dictionary to the Series Dictionary, and a later Book in that Series inherits it
+- [x] Re-running Dictionary Building preserves hand-edited Terms and adds only new ones
+- [x] A merged Dictionary past roughly 100 Terms shows a warning that it will bloat every request
+- [x] Malformed TSV lines are reported with their line number rather than silently dropped
+
+## Comments
+
+2026-09-01: Verified with focused library and UI handler tests, plus `make check`. The UI test covers the TSV endpoints, promotion control, and 101-Term warning. `make headless` exited before exposing its loopback URL in this environment, so browser-level verification could not run; the handler tests exercised the same routes directly.
