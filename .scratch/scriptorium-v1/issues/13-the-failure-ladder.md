@@ -10,14 +10,27 @@ The user can then see how many Chunks failed and choose **Validate and Repair** 
 
 **Blocked by:** 12 — Translation tracer bullet: happy path.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Scripting the fake to drop a node index triggers exactly one retry, with a stricter instruction present in the retry request
-- [ ] A second rejection triggers per-Text-Node requests, one per node, asserted against the recorded requests
-- [ ] Nodes that succeed under the per-node fallback keep their translations
-- [ ] A Chunk failing every rung is marked `failed` in `state.json` and its rejected response is preserved
-- [ ] Automatic final Book Composition is blocked by a failed Chunk
-- [ ] Explicit **Compose translated book** produces a structurally valid partial output with source-text fallback for a failed Chunk
-- [ ] The count of failed Chunks is recorded and readable from the service layer
-- [ ] Each rung of the ladder has its own test
-- [ ] Validator rejections — conversational prefixes, unchanged output, truncated responses — each drive the ladder end to end
+- [x] Scripting the fake to drop a node index triggers exactly one retry, with a stricter instruction present in the retry request
+- [x] A second rejection triggers per-Text-Node requests, one per node, asserted against the recorded requests
+- [x] Nodes that succeed under the per-node fallback keep their translations
+- [x] A Chunk failing every rung is marked `failed` in `state.json` and its rejected response is preserved
+- [x] Automatic final Book Composition is blocked by a failed Chunk
+- [x] Explicit **Compose translated book** produces a structurally valid partial output with source-text fallback for a failed Chunk
+- [x] The count of failed Chunks is recorded and readable from the service layer
+- [x] Each rung of the ladder has its own test
+- [x] Validator rejections — conversational prefixes, unchanged output, truncated responses — each drive the ladder end to end
+
+## Comments
+
+2026-09-03: Implemented the fixed failure ladder in the translation service. A
+rejected Chunk is retried once with a strict protocol instruction, then split
+into one request per Text Node. Rejected responses are retained under
+`chunks/rejected/`; failed Chunks and the aggregate failure count are durable in
+`state.json`, and later Chunks continue without carrying untrusted continuity.
+Automatic composition is refused when any Chunk failed. The explicit
+`ComposeTranslatedBook` service action writes a clearly named partial output
+using source Text Nodes for unavailable translations without invoking the Agent
+or changing state. Service tests cover all validator rejection types and each
+ladder rung; `make check` passes.

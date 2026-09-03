@@ -119,6 +119,27 @@ func TestDictionaryBuildingStateAndDictionaryArePersistedPerTranslationTarget(t 
 	}
 }
 
+func TestSettingTranslationTargetStatusPreservesTranslationProgress(t *testing.T) {
+	s := store(t)
+	series, _ := s.CreateSeries("Solaris", "pl")
+	_, _ = s.AddBook(series.Code, BookDraft{Code: "solaris"})
+	_, _ = s.CreateTranslationTarget(series.Code, "solaris", "uk", []string{"uk"})
+	path := filepath.Join(s.root, series.Code, BooksDir, "solaris", TranslationsDir, "pl-to-uk", StateFile)
+	progress := `{"status":"translating","failed_chunks":1,"chunks":[{"index":0,"status":"failed","attempts":4}]}`
+	if err := os.WriteFile(path, []byte(progress), 0o644); err != nil {
+		t.Fatalf("write translation progress: %v", err)
+	}
+	if err := s.SetTranslationTargetStatus(series.Code, "solaris", "uk", StatusFailed); err != nil {
+		t.Fatalf("SetTranslationTargetStatus(Failed): %v", err)
+	}
+	state := read(t, path)
+	for _, want := range []string{`"status": "failed"`, `"failed_chunks": 1`, `"status": "failed"`, `"attempts": 4`} {
+		if !strings.Contains(state, want) {
+			t.Errorf("state.json = %q, want preserved field %q", state, want)
+		}
+	}
+}
+
 func TestMergedDictionaryLetsTheBookOverrideTheSeries(t *testing.T) {
 	s := store(t)
 	series, _ := s.CreateSeries("Solaris", "pl")

@@ -370,6 +370,220 @@ func TestTranslatorPersistsAcceptedChunkBeforeMarkingItCompleted(t *testing.T) {
 	}
 }
 
+func TestTranslatorRetriesARejectedChunkOnceWithAStrictInstruction(t *testing.T) {
+	source := []byte("A source paragraph.")
+	fixture := newReadyTarget(t, "Retry", "en", "retry", "uk", "retry.txt", source)
+	if _, err := (Translator{Root: fixture.root}).PrepareTextChunks(fixture.series.Code, "retry"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	fake := agent.NewFake(
+		agent.Response{Result: "Thanks for asking:\n[[NODE 0]]\nwrong framing\n[[/NODE]]"},
+		agent.Response{Result: "[[NODE 0]]\nПереклад.\n[[/NODE]]", Cost: 0.2},
+	)
+
+	if _, err := (Translator{Root: fixture.root, Agent: fake, TranslationModel: "strong"}).Translate(context.Background(), fixture.series.Code, "retry", "uk"); err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	requests := fake.RecordedRequests()
+	if len(requests) != 2 {
+		t.Fatalf("recorded requests = %d, want one retry", len(requests))
+	}
+	if !strings.Contains(requests[1].Prompt, "STRICT RETRY INSTRUCTION") {
+		t.Errorf("retry prompt lacks strict instruction:\n%s", requests[1].Prompt)
+	}
+	state := readTranslationState(t, fixture.root, fixture.series.Code, "retry", "uk")
+	if state.Chunks[0].Attempts != 2 || state.Chunks[0].Status != string(chunkCompleted) || state.Chunks[0].Cost != 0.2 {
+		t.Errorf("retry state = %+v, want two attempts and accepted retry", state.Chunks[0])
+	}
+}
+
+func TestTranslatorFallsBackToOneRequestPerTextNode(t *testing.T) {
+	source := []byte("First source.\n\nSecond source.")
+	fixture := newReadyTarget(t, "Per Node", "en", "per-node", "uk", "per-node.txt", source)
+	if _, err := (Translator{Root: fixture.root}).PrepareTextChunks(fixture.series.Code, "per-node"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	fake := agent.NewFake(
+		agent.Response{Result: "[[NODE 99]]\nWrong node.\n[[/NODE]]"},
+		agent.Response{Result: "[[NODE 0]]\nFirst retry is still wrong.\n[[/NODE]]"},
+		agent.Response{Result: "[[NODE 0]]\nПерший.\n[[/NODE]]", Cost: 0.1},
+		agent.Response{Result: "[[NODE 1]]\nДругий.\n[[/NODE]]", Cost: 0.2},
+	)
+
+	outputPath, err := (Translator{Root: fixture.root, Agent: fake, TranslationModel: "strong"}).Translate(context.Background(), fixture.series.Code, "per-node", "uk")
+	if err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	output, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read translated Book: %v", err)
+	}
+	if want := "Перший.\n\nДругий."; string(output) != want {
+		t.Errorf("translated Book = %q, want %q", output, want)
+	}
+	requests := fake.RecordedRequests()
+	if len(requests) != 4 {
+		t.Fatalf("recorded requests = %d, want initial, retry, and one per Text Node", len(requests))
+	}
+	for i, request := range requests[2:] {
+		textNodes := request.Prompt[strings.LastIndex(request.Prompt, "TEXT NODES TO TRANSLATE:"):]
+		if got := strings.Count(textNodes, "[[NODE "); got != 1 {
+			t.Errorf("per-node request %d contains %d node markers, want one", i, got)
+		}
+	}
+	state := readTranslationState(t, fixture.root, fixture.series.Code, "per-node", "uk")
+	if state.Chunks[0].Attempts != 4 || state.Chunks[0].Cost < 0.299 || state.Chunks[0].Cost > 0.301 {
+		t.Errorf("per-node state = %+v, want four attempts and accumulated cost", state.Chunks[0])
+	}
+}
+
+func TestTranslatorPreservesRejectedResponseAndComposesSourceFallbackForFailedChunk(t *testing.T) {
+	source := []byte("First source.\n\nSecond source.")
+	fixture := newReadyTarget(t, "Failed", "en", "failed", "uk", "failed.txt", source)
+	if _, err := (Translator{Root: fixture.root, ChunkWordBudget: 100}).PrepareTextChunks(fixture.series.Code, "failed"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	fake := agent.NewFake(
+		agent.Response{Result: "unchanged framing\n" + SerializeNodes([]format.TextNode{{Index: 0, Text: "First source."}, {Index: 1, Text: "Second source."}})},
+		agent.Response{Result: "[[NODE 0]]\nStill malformed."},
+		agent.Response{Result: "[[NODE 0]]\nRecovered first.\n[[/NODE]]"},
+		agent.Response{Result: "[[NODE 1]]\nStill malformed."},
+	)
+	translator := Translator{Root: fixture.root, Agent: fake, TranslationModel: "strong", ChunkWordBudget: 100}
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "failed", "uk"); err == nil {
+		t.Fatal("Translate error = nil, want failed Chunk error")
+	}
+	state := readTranslationState(t, fixture.root, fixture.series.Code, "failed", "uk")
+	if state.Status != string(targetStateFailed) || state.FailedChunks != 1 || state.Chunks[0].Status != string(chunkFailed) {
+		t.Errorf("failed state = %+v, want failed target and one failed Chunk", state)
+	}
+	rejectedPath := filepath.Join(fixture.root, fixture.series.Code, library.BooksDir, "failed", library.TranslationsDir, "en-to-uk", chunksDirectory, rejectedChunksDirectory, "0.txt")
+	rejected, err := os.ReadFile(rejectedPath)
+	if err != nil {
+		t.Fatalf("read rejected response: %v", err)
+	}
+	if !strings.Contains(string(rejected), "Still malformed") {
+		t.Errorf("rejected response = %q, want latest rejected response", rejected)
+	}
+	if got, err := translator.FailedChunkCount(fixture.series.Code, "failed", "uk"); err != nil || got != 1 {
+		t.Errorf("FailedChunkCount = %d, %v, want one failed Chunk", got, err)
+	}
+	before := readFile(t, filepath.Join(fixture.root, fixture.series.Code, library.BooksDir, "failed", library.TranslationsDir, "en-to-uk", library.StateFile))
+	outputPath, err := translator.ComposeTranslatedBook(fixture.series.Code, "failed", "uk")
+	if err != nil {
+		t.Fatalf("ComposeTranslatedBook: %v", err)
+	}
+	after := readFile(t, filepath.Join(fixture.root, fixture.series.Code, library.BooksDir, "failed", library.TranslationsDir, "en-to-uk", library.StateFile))
+	if before != after {
+		t.Error("ComposeTranslatedBook changed state.json")
+	}
+	if !strings.HasSuffix(outputPath, "failed.uk.partial.txt") {
+		t.Errorf("partial output path = %q, want clearly marked partial output", outputPath)
+	}
+	output, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read partial output: %v", err)
+	}
+	if want := "First source.\n\nSecond source."; string(output) != want {
+		t.Errorf("partial output = %q, want source fallback", output)
+	}
+	if got := len(fake.RecordedRequests()); got != 4 {
+		t.Errorf("ComposeTranslatedBook invoked Agent; requests = %d, want four", got)
+	}
+}
+
+func TestValidatorRejectionsDriveTheFailureLadderEndToEnd(t *testing.T) {
+	cases := map[string]string{
+		"conversational prefix": "Certainly, here is what you asked for:\n[[NODE 0]]\nTranslated.\n[[/NODE]]",
+		"unchanged output":      "[[NODE 0]]\nOriginal source.\n[[/NODE]]",
+		"truncated response":    "[[NODE 0]]\nTranslated.",
+	}
+	for name, firstResponse := range cases {
+		t.Run(name, func(t *testing.T) {
+			fixture := newReadyTarget(t, "Ladder "+name, "en", "ladder", "uk", "ladder.txt", []byte("Original source."))
+			if _, err := (Translator{Root: fixture.root}).PrepareTextChunks(fixture.series.Code, "ladder"); err != nil {
+				t.Fatalf("PrepareTextChunks: %v", err)
+			}
+			fake := agent.NewFake(
+				agent.Response{Result: firstResponse},
+				agent.Response{Result: "[[NODE 0]]\nRetry is truncated."},
+				agent.Response{Result: "[[NODE 0]]\nTranslated successfully.\n[[/NODE]]"},
+			)
+			outputPath, err := (Translator{Root: fixture.root, Agent: fake, TranslationModel: "strong"}).Translate(context.Background(), fixture.series.Code, "ladder", "uk")
+			if err != nil {
+				t.Fatalf("Translate: %v", err)
+			}
+			if got := len(fake.RecordedRequests()); got != 3 {
+				t.Errorf("recorded requests = %d, want whole Chunk, retry, and per-node fallback", got)
+			}
+			if output, err := os.ReadFile(outputPath); err != nil || string(output) != "Translated successfully." {
+				t.Errorf("output = %q, read error = %v", output, err)
+			}
+		})
+	}
+}
+
+func TestTranslatorContinuesAfterAFailedChunkAndKeepsLaterChunksAligned(t *testing.T) {
+	source := []byte("Failed source.\n\nLater source.")
+	fixture := newReadyTarget(t, "Continues", "en", "continues", "uk", "continues.txt", source)
+	if _, err := (Translator{Root: fixture.root, ChunkWordBudget: 1}).PrepareTextChunks(fixture.series.Code, "continues"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	fake := agent.NewFake(
+		agent.Response{Result: "[[NODE 99]]\nWrong node.\n[[/NODE]]"},
+		agent.Response{Result: "[[NODE 0]]\nStill wrong."},
+		agent.Response{Result: "[[NODE 0]]\nStill wrong."},
+		agent.Response{Result: "[[NODE 1]]\nПізніше.\n[[/NODE]]"},
+	)
+	translator := Translator{Root: fixture.root, Agent: fake, TranslationModel: "strong", ChunkWordBudget: 1}
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "continues", "uk"); err == nil {
+		t.Fatal("Translate error = nil, want failed first Chunk")
+	}
+	if got := len(fake.RecordedRequests()); got != 4 {
+		t.Fatalf("recorded requests = %d, want failed ladder plus later Chunk", got)
+	}
+	outputPath, err := translator.ComposeTranslatedBook(fixture.series.Code, "continues", "uk")
+	if err != nil {
+		t.Fatalf("ComposeTranslatedBook: %v", err)
+	}
+	output, err := os.ReadFile(outputPath)
+	if err != nil {
+		t.Fatalf("read partial output: %v", err)
+	}
+	if want := "Failed source.\n\nПізніше."; string(output) != want {
+		t.Errorf("partial output = %q, want aligned source fallback and later translation", output)
+	}
+}
+
+type translationStateForTest struct {
+	Status       string `json:"status"`
+	FailedChunks int    `json:"failed_chunks"`
+	Chunks       []struct {
+		Status   string  `json:"status"`
+		Cost     float64 `json:"cost"`
+		Attempts int     `json:"attempts"`
+	} `json:"chunks"`
+}
+
+func readTranslationState(t *testing.T, root, seriesCode, bookCode, targetLanguage string) translationStateForTest {
+	t.Helper()
+	body := readFile(t, filepath.Join(root, seriesCode, library.BooksDir, bookCode, library.TranslationsDir, "en-to-"+targetLanguage, library.StateFile))
+	var state translationStateForTest
+	if err := json.Unmarshal([]byte(body), &state); err != nil {
+		t.Fatalf("decode translation state: %v", err)
+	}
+	return state
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(body)
+}
+
 type readyTargetFixture struct {
 	root   string
 	store  library.Store

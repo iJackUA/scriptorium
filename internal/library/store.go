@@ -397,19 +397,30 @@ func (s Store) SetTranslationTargetStatus(seriesCode, bookCode, targetLanguage s
 		return fmt.Errorf("unknown Status %q", status)
 	}
 	path := filepath.Join(s.root, seriesCode, BooksDir, bookCode, TranslationsDir, languagePair(series.SourceLanguage, targetLanguage), StateFile)
-	if _, err := os.Stat(path); err != nil {
+	body, err := os.ReadFile(path)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("Translation Target %q does not exist", targetLanguage)
 		}
 		return fmt.Errorf("read %s: %w", StateFile, err)
 	}
-	body, err := json.Marshal(struct {
-		Status string `json:"status"`
-	}{Status: strings.ToLower(strings.ReplaceAll(string(status), " ", "_"))})
+	var state map[string]json.RawMessage
+	if err := json.Unmarshal(body, &state); err != nil {
+		return fmt.Errorf("decode %s: %w", StateFile, err)
+	}
+	if state == nil {
+		return fmt.Errorf("decode %s: expected an object", StateFile)
+	}
+	stateBody, err := json.MarshalIndent(stateWithStatus(state, strings.ToLower(strings.ReplaceAll(string(status), " ", "_"))), "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode %s: %w", StateFile, err)
 	}
-	return writeAtomic(path, body)
+	return writeAtomic(path, stateBody)
+}
+
+func stateWithStatus(state map[string]json.RawMessage, status string) map[string]json.RawMessage {
+	state["status"] = json.RawMessage(`"` + status + `"`)
+	return state
 }
 
 // WriteDictionary extends a Book Dictionary with proposed Terms without

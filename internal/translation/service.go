@@ -23,13 +23,14 @@ const (
 	chunksDirectory           = "chunks"
 	originalChunksDirectory   = "original"
 	translatedChunksDirectory = "translated"
+	rejectedChunksDirectory   = "rejected"
 	manifestFile              = "manifest.json"
 	outputDirectory           = "out"
 	materializationVersion    = 1
 )
 
-// Translator runs the serial happy path from one ready Translation Target to
-// a composed translated Book. Root is the workspace root; Agent is the sole
+// Translator runs serial translation from one ready Translation Target to a
+// composed translated Book. Root is the workspace root; Agent is the sole
 // external-work substitution seam.
 type Translator struct {
 	Root             string
@@ -71,6 +72,7 @@ type translationState struct {
 	SourceFile            string            `json:"source_file"`
 	SourceFingerprint     string            `json:"source_fingerprint"`
 	DictionaryFingerprint string            `json:"dictionary_fingerprint"`
+	FailedChunks          int               `json:"failed_chunks"`
 	Chunks                []chunkState      `json:"chunks"`
 }
 
@@ -87,6 +89,7 @@ type targetStateStatus string
 const (
 	targetStateTranslating targetStateStatus = "translating"
 	targetStateTranslated  targetStateStatus = "translated"
+	targetStateFailed      targetStateStatus = "failed"
 )
 
 type chunkStatus string
@@ -94,7 +97,16 @@ type chunkStatus string
 const (
 	chunkPending   chunkStatus = "pending"
 	chunkCompleted chunkStatus = "completed"
+	chunkFailed    chunkStatus = "failed"
 )
+
+const strictRetryInstruction = `
+
+STRICT RETRY INSTRUCTION:
+Your previous response was rejected by the validator. Return exactly one complete
+numbered block for every supplied Text Node, with every global index exactly once.
+Return only the requested blocks; do not add a conversational prefix, heading,
+Markdown, explanation, or any text outside the blocks.`
 
 // PrepareTextChunks parses and chunks a Book's Source File, then persists the
 // numbered original Chunk artifacts and manifest. It never invokes an Agent.
@@ -193,31 +205,29 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 		if index == 0 || chunks[index-1].Chapter != chunk.Chapter {
 			continuity = continuityWindow{}
 		}
-		request := agent.Request{
-			Model: t.TranslationModel,
-			Prompt: translationPrompt(
-				languageLabel(sourceLanguage),
-				languageLabel(targetLanguageInfo),
-				dictionary,
-				continuity,
-				chunk.Nodes,
-			),
-		}
-		response, err := t.Agent.Call(ctx, request)
+		translated, complete, attempts, cost, err := t.translateChunk(ctx, targetDirectory, sourceLanguage, targetLanguageInfo, dictionary, continuity, chunk)
+		state.Chunks[index].Attempts = attempts
+		state.Chunks[index].Cost = cost
 		if err != nil {
+			state.FailedChunks = failedChunkCount(state.Chunks)
+			_ = writeJSONAtomic(statePath, state)
 			return "", fmt.Errorf("translate Chunk %d: %w", chunk.Index, err)
 		}
-		translated, err := ValidateTranslation(chunk.Nodes, response.Result)
-		if err != nil {
-			return "", fmt.Errorf("validate Chunk %d: %w", chunk.Index, err)
+		if !complete {
+			state.Chunks[index].Status = chunkFailed
+			state.FailedChunks = failedChunkCount(state.Chunks)
+			continuity = continuityWindow{}
+			if err := writeJSONAtomic(statePath, state); err != nil {
+				return "", err
+			}
+			continue
 		}
 		translatedPath := filepath.Join(targetDirectory, chunksDirectory, translatedChunksDirectory, chunkFileName(chunk.Index))
 		if err := writeAtomic(translatedPath, []byte(SerializeNodes(translated))); err != nil {
 			return "", err
 		}
 		state.Chunks[index].Status = chunkCompleted
-		state.Chunks[index].Cost = response.Cost
-		state.Chunks[index].Attempts = 1
+		state.FailedChunks = failedChunkCount(state.Chunks)
 		if err := writeJSONAtomic(statePath, state); err != nil {
 			return "", err
 		}
@@ -225,6 +235,13 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 			source:       append([]format.TextNode(nil), chunk.Nodes...),
 			translations: append([]format.TextNode(nil), translated...),
 		}
+	}
+	if state.FailedChunks > 0 {
+		state.Status = targetStateFailed
+		if err := writeJSONAtomic(statePath, state); err != nil {
+			return "", err
+		}
+		return "", fmt.Errorf("translation has %d failed Chunks; automatic Book Composition is blocked", state.FailedChunks)
 	}
 
 	output, err := composeFromPersisted(document, targetDirectory, chunks)
@@ -241,6 +258,147 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 		return "", err
 	}
 	return outputPath, nil
+}
+
+func (t Translator) translateChunk(ctx context.Context, targetDirectory string, sourceLanguage, targetLanguage workspace.Language, dictionary []library.Term, continuity continuityWindow, chunk Chunk) ([]format.TextNode, bool, int, float64, error) {
+	basePrompt := translationPrompt(languageLabel(sourceLanguage), languageLabel(targetLanguage), dictionary, continuity, chunk.Nodes)
+	attempts := 0
+	var cost float64
+
+	call := func(prompt string, nodes []format.TextNode) ([]format.TextNode, bool, error) {
+		response, err := t.Agent.Call(ctx, agent.Request{Model: t.TranslationModel, Prompt: prompt})
+		attempts++
+		cost += response.Cost
+		if err != nil {
+			return nil, false, err
+		}
+		translated, err := ValidateTranslation(nodes, response.Result)
+		if err == nil {
+			return translated, true, nil
+		}
+		if persistErr := writeAtomic(filepath.Join(targetDirectory, chunksDirectory, rejectedChunksDirectory, chunkFileName(chunk.Index)), []byte(response.Result)); persistErr != nil {
+			return nil, false, persistErr
+		}
+		return nil, false, nil
+	}
+
+	translated, valid, err := call(basePrompt, chunk.Nodes)
+	if err != nil {
+		return nil, false, attempts, cost, err
+	}
+	if valid {
+		return translated, true, attempts, cost, nil
+	}
+
+	translated, valid, err = call(basePrompt+strictRetryInstruction, chunk.Nodes)
+	if err != nil {
+		return nil, false, attempts, cost, err
+	}
+	if valid {
+		return translated, true, attempts, cost, nil
+	}
+
+	var perNode []format.TextNode
+	allNodesValid := true
+	for _, node := range chunk.Nodes {
+		translated, valid, err = call(translationPrompt(languageLabel(sourceLanguage), languageLabel(targetLanguage), dictionary, continuity, []format.TextNode{node}), []format.TextNode{node})
+		if err != nil {
+			return nil, false, attempts, cost, err
+		}
+		if valid {
+			perNode = append(perNode, translated...)
+			continue
+		}
+		allNodesValid = false
+	}
+	if !allNodesValid {
+		// A Chunk cannot be accepted with a hole. Successful individual nodes
+		// are deliberately kept only in memory; the whole Chunk remains
+		// ineligible for automatic composition.
+		return nil, false, attempts, cost, nil
+	}
+	return perNode, true, attempts, cost, nil
+}
+
+// FailedChunkCount reads the durable failure count without contacting the
+// Agent. A missing translation state has no failed Chunks yet.
+func (t Translator) FailedChunkCount(seriesCode, bookCode, targetLanguage string) (int, error) {
+	targetDirectory, err := t.translationTargetDirectory(seriesCode, bookCode, targetLanguage)
+	if err != nil {
+		return 0, err
+	}
+	state, err := loadTranslationState(filepath.Join(targetDirectory, library.StateFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return failedChunkCount(state.Chunks), nil
+}
+
+// ComposeTranslatedBook writes a diagnostic Book from valid persisted Chunk
+// Translations and source Text Node fallbacks for missing or rejected Chunks.
+// It never invokes the Agent or changes state.json. A partial output is named
+// explicitly so it cannot be mistaken for a complete translation.
+func (t Translator) ComposeTranslatedBook(seriesCode, bookCode, targetLanguage string) (string, error) {
+	store := library.NewStore(t.Root)
+	source, sourceName, err := store.SourceFile(seriesCode, bookCode)
+	if err != nil {
+		return "", err
+	}
+	document, err := parseSource(sourceName, source)
+	if err != nil {
+		return "", err
+	}
+	lib, err := store.Library()
+	if err != nil {
+		return "", err
+	}
+	series, _, ok := lib.Book(seriesCode, bookCode)
+	if !ok {
+		return "", fmt.Errorf("Book %q is not in Series %q", bookCode, seriesCode)
+	}
+	bookDirectory := filepath.Join(t.Root, seriesCode, library.BooksDir, bookCode)
+	manifest, err := loadPreparedMaterialization(bookDirectory, sourceName, source, document)
+	if err != nil {
+		return "", err
+	}
+	targetDirectory := filepath.Join(bookDirectory, library.TranslationsDir, languagePair(series.SourceLanguage, targetLanguage))
+	if _, err := loadTranslationState(filepath.Join(targetDirectory, library.StateFile)); err != nil {
+		return "", fmt.Errorf("check Translation Target state: %w", err)
+	}
+	output, partial, err := composeWithSourceFallback(document, targetDirectory, manifest.chunks)
+	if err != nil {
+		return "", err
+	}
+	extension := filepath.Ext(sourceName)
+	name := bookCode + "." + targetLanguage
+	if partial {
+		name += ".partial"
+	}
+	outputPath := filepath.Join(targetDirectory, outputDirectory, name+extension)
+	if err := writeAtomic(outputPath, output); err != nil {
+		return "", err
+	}
+	return outputPath, nil
+}
+
+func (t Translator) translationTargetDirectory(seriesCode, bookCode, targetLanguage string) (string, error) {
+	lib, err := library.NewStore(t.Root).Library()
+	if err != nil {
+		return "", err
+	}
+	series, book, ok := lib.Book(seriesCode, bookCode)
+	if !ok {
+		return "", fmt.Errorf("Book %q is not in Series %q", bookCode, seriesCode)
+	}
+	for _, target := range book.Targets {
+		if target.Language == targetLanguage {
+			return filepath.Join(t.Root, seriesCode, library.BooksDir, bookCode, library.TranslationsDir, languagePair(series.SourceLanguage, targetLanguage)), nil
+		}
+	}
+	return "", fmt.Errorf("Translation Target %q does not exist", targetLanguage)
 }
 
 func readyTarget(store library.Store, seriesCode, bookCode, targetLanguage string) (library.Series, library.Book, library.TranslationTarget, error) {
@@ -386,24 +544,59 @@ func newTranslationState(sourceName string, source []byte, dictionary []library.
 }
 
 func composeFromPersisted(document format.Document, targetDirectory string, chunks []Chunk) ([]byte, error) {
+	output, partial, err := composeWithSourceFallback(document, targetDirectory, chunks)
+	if err != nil {
+		return nil, err
+	}
+	if partial {
+		return nil, errors.New("automatic Book Composition is blocked by an incomplete Chunk Translation")
+	}
+	return output, nil
+}
+
+func composeWithSourceFallback(document format.Document, targetDirectory string, chunks []Chunk) ([]byte, bool, error) {
 	translations := make([]format.TextNode, 0, len(document.TextNodes()))
+	partial := false
 	for _, chunk := range chunks {
 		path := filepath.Join(targetDirectory, chunksDirectory, translatedChunksDirectory, chunkFileName(chunk.Index))
 		body, err := os.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read translated Chunk %d: %w", chunk.Index, err)
+		if err == nil {
+			translated, validationErr := ValidateTranslation(chunk.Nodes, string(body))
+			if validationErr == nil {
+				translations = append(translations, translated...)
+				continue
+			}
 		}
-		translated, err := ValidateTranslation(chunk.Nodes, string(body))
-		if err != nil {
-			return nil, fmt.Errorf("validate persisted translated Chunk %d: %w", chunk.Index, err)
-		}
-		translations = append(translations, translated...)
+		partial = true
+		translations = append(translations, chunk.Nodes...)
 	}
 	output, err := document.Splice(translations)
 	if err != nil {
-		return nil, fmt.Errorf("compose translated Book: %w", err)
+		return nil, partial, fmt.Errorf("compose translated Book: %w", err)
 	}
-	return output, nil
+	return output, partial, nil
+}
+
+func loadTranslationState(path string) (translationState, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return translationState{}, err
+	}
+	var state translationState
+	if err := json.Unmarshal(body, &state); err != nil {
+		return translationState{}, fmt.Errorf("decode Translation Target state: %w", err)
+	}
+	return state, nil
+}
+
+func failedChunkCount(chunks []chunkState) int {
+	count := 0
+	for _, chunk := range chunks {
+		if chunk.Status == chunkFailed {
+			count++
+		}
+	}
+	return count
 }
 
 func writeJSONAtomic(path string, value any) error {
