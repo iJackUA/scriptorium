@@ -78,6 +78,7 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("POST /series", s.createSeries)
 	mux.HandleFunc("POST /books", s.addBook)
 	mux.HandleFunc("POST /settings/target-languages", s.setTargetLanguages)
+	mux.HandleFunc("GET /books", s.booksList)
 	mux.HandleFunc("GET /series/{series}/books/{book}", s.bookDetail)
 	mux.HandleFunc("POST /series/{series}/books/{book}/source", s.uploadSourceFile)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets", s.createTarget)
@@ -241,7 +242,22 @@ func (s screens) bookDetail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	fragment(w, "book-detail", s.bookDetailData(series, book, ""))
+	s.renderBookDetail(w, r, lib, series, book, "", "")
+}
+
+// booksList rereads the workspace before rendering the sidebar, so a user can
+// explicitly pick up Books or status changes made outside Scriptorium.
+func (s screens) booksList(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	lib, err := store.Library()
+	if err != nil {
+		s.reply(w, r, form{})
+		return
+	}
+	fragment(w, "books-list", libraryScreen{Library: lib})
 }
 
 func (s screens) uploadSourceFile(w http.ResponseWriter, r *http.Request) {
@@ -792,9 +808,29 @@ func (s screens) renderDetail(w http.ResponseWriter, r *http.Request, problem, n
 		http.NotFound(w, r)
 		return
 	}
+	s.renderBookDetail(w, r, lib, series, book, problem, notice)
+}
+
+// renderBookDetail keeps the selected Book and the Books sidebar in lockstep.
+// Every action rereads the Library from disk, then htmx swaps the detail and
+// receives the newly rendered sidebar as an out-of-band update.
+func (s screens) renderBookDetail(w http.ResponseWriter, r *http.Request, lib library.Library, series library.Series, book library.Book, problem, notice string) {
 	data := s.bookDetailData(series, book, problem)
 	data.Notice = notice
-	fragment(w, "book-detail", data)
+	body, err := execute("book-detail", data)
+	if err != nil {
+		fail(w, "book-detail", err)
+		return
+	}
+	if r.Header.Get("HX-Request") == "true" {
+		books, err := execute("books-list-oob", libraryScreen{Library: lib})
+		if err != nil {
+			fail(w, "books-list-oob", err)
+			return
+		}
+		body += books
+	}
+	write(w, body)
 }
 
 type bookDetailData struct {

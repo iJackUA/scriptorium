@@ -173,6 +173,48 @@ func TestLibraryPageListsWhatIsInTheWorkspace(t *testing.T) {
 	}
 }
 
+func TestBooksListRefreshRereadsTheWorkspace(t *testing.T) {
+	root := t.TempDir()
+	store := seedLibrary(t, root)
+	if _, err := store.CreateTranslationTarget("the-adventures-of-sherlock-holmes", "memoirs", "uk", []string{"uk"}); err != nil {
+		t.Fatalf("CreateTranslationTarget: %v", err)
+	}
+	if err := store.SetTranslationTargetStatus("the-adventures-of-sherlock-holmes", "memoirs", "uk", library.StatusDictionaryReady); err != nil {
+		t.Fatalf("SetTranslationTargetStatus: %v", err)
+	}
+	s := newTestServerFor(t, sessionFor(t, root))
+
+	req := request(s, "/books")
+	req.Header.Set("HX-Request", "true")
+	body := serve(s, req).Body.String()
+	for _, want := range []string{`id="books-list"`, "Books:", "Refresh books list", "Ukrainian (uk): Dictionary Ready"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("refreshed Books list is missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestSelectingABookRereadsItsWorkspaceStateAndRefreshesTheBooksList(t *testing.T) {
+	root := t.TempDir()
+	store := seedLibrary(t, root)
+	if _, err := store.CreateTranslationTarget("the-adventures-of-sherlock-holmes", "memoirs", "uk", []string{"uk"}); err != nil {
+		t.Fatalf("CreateTranslationTarget: %v", err)
+	}
+	if err := store.SetTranslationTargetStatus("the-adventures-of-sherlock-holmes", "memoirs", "uk", library.StatusDictionaryReady); err != nil {
+		t.Fatalf("SetTranslationTargetStatus: %v", err)
+	}
+	s := newTestServerFor(t, sessionFor(t, root))
+
+	req := request(s, "/series/the-adventures-of-sherlock-holmes/books/memoirs")
+	req.Header.Set("HX-Request", "true")
+	body := serve(s, req).Body.String()
+	for _, want := range []string{"Dictionary Ready", `id="books-list" hx-swap-oob="outerHTML"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("selecting a Book did not use workspace-backed state or refresh the list: missing %q:\n%s", want, body)
+		}
+	}
+}
+
 func TestSingleBookSeriesRendersWithoutAGroupHeader(t *testing.T) {
 	s := newTestServer(t)
 

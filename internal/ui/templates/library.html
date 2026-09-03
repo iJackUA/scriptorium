@@ -14,49 +14,7 @@
 
   <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-6">
     <div class="flex flex-col gap-6">
-      {{if not .Library.Series}}
-        <div class="card border border-base-300 bg-base-100">
-          <div class="card-body">
-            <p class="text-body text-base-content/60" data-testid="empty-library">
-              Nothing here yet. Add a Book, and it gets a folder of its own in
-              your workspace.
-            </p>
-          </div>
-        </div>
-      {{end}}
-      {{range .Library.Series}}
-        <section class="card border border-base-300 bg-base-100">
-          <div class="card-body gap-4">
-            {{if not .Standalone}}
-              <h2 class="card-title flex-wrap items-center text-title">
-                {{.Name}}
-                <span class="badge badge-sm badge-ghost whitespace-nowrap text-micro">{{languageName .SourceLanguage}} ({{.SourceLanguage}})</span>
-              </h2>
-            {{end}}
-            <ul class="flex flex-col gap-1">
-              {{$series := .}}
-              {{range .Books}}
-                <li>
-                  <button class="btn btn-ghost rounded-field w-full flex-col items-start h-auto gap-1 py-3 font-normal normal-case"
-                          hx-get="/series/{{$series.Code}}/books/{{.Code}}"
-                          hx-target="#book-detail"
-                          hx-swap="innerHTML">
-                    <span class="text-control font-semibold text-left">{{.Label}}</span>
-                    {{with .Targets}}
-                      <span class="flex gap-1 flex-wrap">
-                        {{range .}}
-                          <span class="badge badge-sm badge-soft whitespace-nowrap text-micro {{template "status-class" .Status}}">{{languageName .Language}} ({{.Language}}): {{.Status}}</span>
-                        {{end}}
-                      </span>
-                    {{end}}
-                    <span class="text-micro text-base-content/60 text-left">{{with .Author}}{{.}} · {{end}}{{.Code}}</span>
-                  </button>
-                </li>
-              {{end}}
-            </ul>
-          </div>
-        </section>
-      {{end}}
+      {{template "books-list" .}}
     </div>
 
     <aside id="book-detail">
@@ -83,6 +41,21 @@
   </div>
 </dialog>
 {{template "library-forms" .}}
+{{end}}
+
+{{define "books-list"}}
+<section id="books-list" class="flex flex-col gap-6">{{template "books-list-content" .}}</section>
+{{end}}
+
+{{define "books-list-oob"}}<section id="books-list" hx-swap-oob="outerHTML" class="flex flex-col gap-6">{{template "books-list-content" .}}</section>{{end}}
+
+{{define "books-list-content"}}
+  <div class="flex items-center justify-between gap-3">
+    <h2 class="text-subhead">Books:</h2>
+    <button class="btn btn-ghost btn-sm rounded-selector px-3" type="button" hx-get="/books" hx-target="#books-list" hx-swap="outerHTML">Refresh books list</button>
+  </div>
+  {{if not .Library.Series}}<div class="card border border-base-300 bg-base-100"><div class="card-body"><p class="text-body text-base-content/60" data-testid="empty-library">Nothing here yet. Add a Book, and it gets a folder of its own in your workspace.</p></div></div>{{end}}
+  {{range .Library.Series}}<section class="card border border-base-300 bg-base-100"><div class="card-body gap-4">{{if not .Standalone}}<h3 class="card-title flex-wrap items-center text-title">{{.Name}} <span class="badge badge-sm badge-ghost whitespace-nowrap text-micro">{{languageName .SourceLanguage}} ({{.SourceLanguage}})</span></h3>{{end}}<ul class="flex flex-col gap-1">{{$series := .}}{{range .Books}}<li><button class="btn btn-ghost rounded-field w-full flex-col items-start h-auto gap-1 py-3 font-normal normal-case" hx-get="/series/{{$series.Code}}/books/{{.Code}}" hx-target="#book-detail" hx-swap="innerHTML"><span class="text-control font-semibold text-left">{{.Label}}</span>{{with .Targets}}<span class="flex gap-1 flex-wrap">{{range .}}<span class="badge badge-sm badge-soft whitespace-nowrap text-micro {{template "status-class" .Status}}">{{languageName .Language}} ({{.Language}}): {{.Status}}</span>{{end}}</span>{{end}}<span class="text-micro text-base-content/60 text-left">{{with .Author}}{{.}} · {{end}}{{.Code}}</span></button></li>{{end}}</ul></div></section>{{end}}
 {{end}}
 
 {{/*
