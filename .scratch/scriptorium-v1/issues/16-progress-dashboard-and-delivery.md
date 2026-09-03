@@ -10,17 +10,17 @@ When every Chunk Translation is valid, Book Composition runs automatically and p
 
 **Status:** ready-for-agent
 
-- [ ] Server-sent events carry progress for both Dictionary Building and translation
-- [ ] Translation progress shows Chunks completed out of the total
-- [ ] Accumulated cost for a Translation Target is displayed and updates as the run proceeds
-- [ ] Stopping a running translation leaves persisted Chunk artifacts and `state.json` consistent and the book resumable
-- [ ] **Validate and Repair** checks the persisted state and translated Chunk files, then re-requests only missing or malformed Chunks
-- [ ] **Compose translated book** produces a best-effort output without calling the Agent or changing `state.json`, and warns when it is partial
-- [ ] Automatic Book Composition runs only when every Chunk Translation is valid
-- [ ] An open-folder button reveals the output directory, routed through a single platform shim function
-- [ ] Handlers stay thin adapters over the service layer; they carry no pipeline logic
-- [ ] A dropped SSE connection reconnects and resyncs rather than freezing the display
+- [x] Server-sent events carry progress for both Dictionary Building and translation
+- [x] Translation progress shows Chunks completed out of the total
+- [x] Accumulated cost for a Translation Target is displayed and updates as the run proceeds
+- [x] Stopping a running translation leaves persisted Chunk artifacts and `state.json` consistent and the book resumable
+- [x] **Validate and Repair** checks the persisted state and translated Chunk files, then re-requests only missing or malformed Chunks
+- [x] **Compose translated book** produces a best-effort output without calling the Agent or changing `state.json`, and warns when it is partial
+- [x] Automatic Book Composition runs only when every Chunk Translation is valid
+- [x] An open-folder button reveals the output directory, routed through a single platform shim function
+- [x] Handlers stay thin adapters over the service layer; they carry no pipeline logic
+- [x] A dropped SSE connection reconnects and resyncs rather than freezing the display
 
 ## Comments
 
-2026-09-03: Implemented durable translation progress and cost snapshots, cancellable translation runs, SSE progress streams for Dictionary Building and translation (each sends the current snapshot on reconnect), diagnostic composition, output-folder reveal routing, and dashboard controls. `make check` passes. Started `make headless` at `http://127.0.0.1:52356`; visual verification could not be completed because the available in-app browser backend reported no discoverable IAB backend. Focused HTTP/UI and service tests cover the rendered and service seams.
+2026-09-03: Implemented durable translation progress and cost snapshots, cancellable translation runs, SSE progress streams for Dictionary Building and translation (each sends the current snapshot on reconnect), diagnostic composition, output-folder reveal routing, and dashboard controls. Review fixes ensure pending Chunks count as incomplete and diagnostic composition remains available for every Translation Target. `make check` passes. Started `make headless` at `http://127.0.0.1:52356`; visual verification could not be completed because the available in-app browser backend reported no discoverable IAB backend. Focused HTTP/UI and service tests cover the rendered and service seams.
