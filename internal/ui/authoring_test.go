@@ -528,6 +528,19 @@ func TestNewTranslationTargetWithASourceFileOffersDictionaryBuilding(t *testing.
 	}
 }
 
+func TestNewTranslationTargetAlwaysOffersDiagnosticComposition(t *testing.T) {
+	body, err := execute("book-detail", bookDetailData{
+		Series: library.Series{Code: "solaris", SourceLanguage: "en"},
+		Book:   library.Book{Code: "solaris", Targets: []library.TranslationTarget{{Language: "uk", Status: library.StatusNew}}},
+	})
+	if err != nil {
+		t.Fatalf("render new Translation Target: %v", err)
+	}
+	if !strings.Contains(body, "/targets/uk/compose") || !strings.Contains(body, "Compose translated book") {
+		t.Errorf("new Translation Target lacks diagnostic composition action:\n%s", body)
+	}
+}
+
 func TestPrepareTextChunksActionPersistsBookChunks(t *testing.T) {
 	root := t.TempDir()
 	store := library.NewStore(root)

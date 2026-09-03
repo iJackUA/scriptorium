@@ -342,14 +342,7 @@ func (t Translator) report(state translationState) {
 	if t.Report == nil {
 		return
 	}
-	progress := Progress{Total: len(state.Chunks), Failed: failedChunkCount(state.Chunks)}
-	for _, chunk := range state.Chunks {
-		if chunk.Status == chunkCompleted {
-			progress.Completed++
-		}
-		progress.Cost += chunk.Cost
-	}
-	t.Report(progress)
+	t.Report(progressFromState(state))
 }
 
 // TranslationProgress reads the durable dashboard values without contacting
@@ -366,14 +359,20 @@ func (t Translator) TranslationProgress(seriesCode, bookCode, targetLanguage str
 	if err != nil {
 		return Progress{}, fmt.Errorf("read Translation Target state: %w", err)
 	}
-	progress := Progress{Total: len(state.Chunks), Failed: failedChunkCount(state.Chunks)}
+	return progressFromState(state), nil
+}
+
+func progressFromState(state translationState) Progress {
+	progress := Progress{Total: len(state.Chunks)}
 	for _, chunk := range state.Chunks {
 		if chunk.Status == chunkCompleted {
 			progress.Completed++
+		} else {
+			progress.Failed++
 		}
 		progress.Cost += chunk.Cost
 	}
-	return progress, nil
+	return progress
 }
 
 func loadOrCreateTranslationState(path, sourceName string, source []byte, dictionary []library.Term, chunks []manifestChunk) (translationState, bool, error) {
