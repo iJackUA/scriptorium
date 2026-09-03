@@ -8,17 +8,17 @@ The user can also retry only the Chunks that failed, without re-translating the 
 
 **Blocked by:** 12 — Translation tracer bullet: happy path.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Scripting a mid-book failure and running **Validate and Repair** re-requests only missing, failed, or malformed translated Chunks, asserted against the recorded requests
-- [ ] A killed process after translated-Chunk write but before the state update promotes the valid file without re-requesting it
-- [ ] Editing the Dictionary and re-running re-requests exactly the affected Chunks and no others
-- [ ] Replacing the Source File discards the old Chunk Materialization and its translated artifacts before a new run
-- [ ] Retrying failed Chunks re-requests only those Chunks
-- [ ] Re-running a fully completed Translation Target requests nothing
-- [ ] Resumption preserves accumulated cost rather than resetting it
-- [ ] A malformed translated Chunk is preserved as the latest rejected response and is not used for Book Composition
-- [ ] A valid manually edited translated Chunk is used without retranslation
+- [x] Scripting a mid-book failure and running **Validate and Repair** re-requests only missing, failed, or malformed translated Chunks, asserted against the recorded requests
+- [x] A killed process after translated-Chunk write but before the state update promotes the valid file without re-requesting it
+- [x] Editing the Dictionary and re-running re-requests exactly the affected Chunks and no others
+- [x] Replacing the Source File discards the old Chunk Materialization and its translated artifacts before a new run
+- [x] Retrying failed Chunks re-requests only those Chunks
+- [x] Re-running a fully completed Translation Target requests nothing
+- [x] Resumption preserves accumulated cost rather than resetting it
+- [x] A malformed translated Chunk is preserved as the latest rejected response and is not used for Book Composition
+- [x] A valid manually edited translated Chunk is used without retranslation
 
 ## Comments
 
