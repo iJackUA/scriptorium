@@ -33,11 +33,15 @@ type Term struct {
 // Book is a single work belonging to exactly one Series. Its Book Code names
 // the folder it is stored under.
 type Book struct {
-	Code       string
-	Title      string
-	Author     string
-	SourceFile string
-	Targets    []TranslationTarget
+	Code   string
+	Title  string
+	Author string
+	// SourceFileLanguage is the language declared by the Source File's own
+	// metadata. It is descriptive only; Series.SourceLanguage remains the
+	// immutable Language Tag used for translation.
+	SourceFileLanguage string
+	SourceFile         string
+	Targets            []TranslationTarget
 }
 
 // Label is what to call the Book on screen.

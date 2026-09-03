@@ -18,6 +18,7 @@ import (
 	"github.com/ijackua/scriptorium/internal/format/fb2"
 	"github.com/ijackua/scriptorium/internal/format/txt"
 	"github.com/ijackua/scriptorium/internal/library"
+	"github.com/ijackua/scriptorium/internal/metadata"
 	"github.com/ijackua/scriptorium/internal/translation"
 	"github.com/ijackua/scriptorium/internal/workspace"
 )
@@ -81,6 +82,7 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("GET /books", s.booksList)
 	mux.HandleFunc("GET /series/{series}/books/{book}", s.bookDetail)
 	mux.HandleFunc("POST /series/{series}/books/{book}/source", s.uploadSourceFile)
+	mux.HandleFunc("POST /series/{series}/books/{book}/metadata", s.updateBookMetadata)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets", s.createTarget)
 	mux.HandleFunc("DELETE /series/{series}/books/{book}/targets/{target}", s.deleteTarget)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary", s.startDictionaryBuilding)
@@ -272,7 +274,61 @@ func (s screens) uploadSourceFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 	confirmed := r.FormValue("confirmed") == "true"
-	if err := store.UploadSourceFile(r.PathValue("series"), r.PathValue("book"), header.Filename, file, confirmed); err != nil {
+	source, err := io.ReadAll(file)
+	if err != nil {
+		s.detail(w, r, "read Source File: "+err.Error())
+		return
+	}
+	seriesCode, bookCode := r.PathValue("series"), r.PathValue("book")
+	if err := store.UploadSourceFile(seriesCode, bookCode, header.Filename, bytes.NewReader(source), confirmed); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	s.fillMetadata(store, seriesCode, bookCode, header.Filename, source)
+	s.bookDetail(w, r)
+}
+
+func (s screens) fillMetadata(store library.Store, seriesCode, bookCode, filename string, source []byte) {
+	var fields metadata.Fields
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".fb2":
+		fields = metadata.FB2(source)
+	case ".txt":
+		ws, ok := s.session.Current()
+		if !ok {
+			return
+		}
+		client, err := s.agents(ws.Config.Agent, nil)
+		if err != nil {
+			return
+		}
+		inferred, err := metadata.InferText(context.Background(), client, ws.Config.Models.Mechanical, source)
+		if err != nil {
+			return
+		}
+		fields = inferred
+	}
+	if fields.SourceFileLanguage != "" {
+		if _, ok := workspace.LanguageFor(fields.SourceFileLanguage); !ok {
+			fields.SourceFileLanguage = ""
+		}
+	}
+	_ = store.FillBookMetadata(seriesCode, bookCode, library.BookMetadata(fields))
+}
+
+func (s screens) updateBookMetadata(w http.ResponseWriter, r *http.Request) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	fields := library.BookMetadata{Title: r.FormValue("title"), Author: r.FormValue("author"), SourceFileLanguage: r.FormValue("source_file_language")}
+	if fields.SourceFileLanguage != "" {
+		if _, ok := workspace.LanguageFor(fields.SourceFileLanguage); !ok {
+			s.detail(w, r, "choose a language from the catalog")
+			return
+		}
+	}
+	if err := store.UpdateBookMetadata(r.PathValue("series"), r.PathValue("book"), fields); err != nil {
 		s.detail(w, r, err.Error())
 		return
 	}
@@ -837,6 +893,7 @@ type bookDetailData struct {
 	Series       library.Series
 	Book         library.Book
 	Allowed      []targetOption
+	Languages    []workspace.Language
 	Progress     map[string]translation.DictionaryProgress
 	Dictionaries map[string]dictionaryReview
 	Prepared     map[string]bool
@@ -901,7 +958,7 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 			allowed = append(allowed, targetOption{Language: language, Status: existing[tag]})
 		}
 	}
-	return bookDetailData{Series: series, Book: book, Allowed: allowed, Progress: progress, Dictionaries: dictionaries, Prepared: prepared, Problem: problem}
+	return bookDetailData{Series: series, Book: book, Allowed: allowed, Languages: workspace.Catalog(), Progress: progress, Dictionaries: dictionaries, Prepared: prepared, Problem: problem}
 }
 
 func (s screens) reviewDictionary(store library.Store, series library.Series, book library.Book, targetLanguage string) dictionaryReview {

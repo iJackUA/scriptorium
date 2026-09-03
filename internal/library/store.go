@@ -119,8 +119,19 @@ type seriesFile struct {
 
 // bookFile is the on-disk shape of book.toml.
 type bookFile struct {
-	Title  string `toml:"title"`
-	Author string `toml:"author"`
+	Title                    string `toml:"title"`
+	Author                   string `toml:"author"`
+	SourceFileLanguage       string `toml:"source_file_language"`
+	TitleEdited              bool   `toml:"title_edited"`
+	AuthorEdited             bool   `toml:"author_edited"`
+	SourceFileLanguageEdited bool   `toml:"source_file_language_edited"`
+}
+
+// BookMetadata is the editable detail set shown on a Book's details page.
+type BookMetadata struct {
+	Title              string
+	Author             string
+	SourceFileLanguage string
 }
 
 // series reads one Series and the Books under it.
@@ -179,7 +190,7 @@ func (s Store) books(seriesCode, sourceLanguage string) ([]Book, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read Book %s: %w", entry.Name(), err)
 		}
-		books = append(books, Book{Code: entry.Name(), Title: file.Title, Author: file.Author, SourceFile: source, Targets: targets})
+		books = append(books, Book{Code: entry.Name(), Title: file.Title, Author: file.Author, SourceFileLanguage: file.SourceFileLanguage, SourceFile: source, Targets: targets})
 	}
 	slices.SortFunc(books, func(a, b Book) int { return strings.Compare(a.Code, b.Code) })
 	return books, nil
@@ -364,6 +375,41 @@ func (s Store) UploadSourceFile(seriesCode, bookCode, filename string, source io
 		return fmt.Errorf("store Source File: %w", err)
 	}
 	return nil
+}
+
+// FillBookMetadata records fields obtained from a Source File without
+// replacing fields a person has corrected in the details form.
+func (s Store) FillBookMetadata(seriesCode, bookCode string, fields BookMetadata) error {
+	path, file, err := s.bookFile(seriesCode, bookCode)
+	if err != nil {
+		return err
+	}
+	if !file.TitleEdited {
+		file.Title = strings.TrimSpace(fields.Title)
+	}
+	if !file.AuthorEdited {
+		file.Author = strings.TrimSpace(fields.Author)
+	}
+	if !file.SourceFileLanguageEdited {
+		file.SourceFileLanguage = strings.TrimSpace(fields.SourceFileLanguage)
+	}
+	return writeBookFile(path, file)
+}
+
+// UpdateBookMetadata records the values explicitly submitted from the details
+// form. All three fields become authoritative, including deliberately blank
+// values, so later source parsing cannot undo a correction.
+func (s Store) UpdateBookMetadata(seriesCode, bookCode string, fields BookMetadata) error {
+	path, file, err := s.bookFile(seriesCode, bookCode)
+	if err != nil {
+		return err
+	}
+	title, author, sourceFileLanguage := strings.TrimSpace(fields.Title), strings.TrimSpace(fields.Author), strings.TrimSpace(fields.SourceFileLanguage)
+	file.TitleEdited = file.TitleEdited || title != file.Title
+	file.AuthorEdited = file.AuthorEdited || author != file.Author
+	file.SourceFileLanguageEdited = file.SourceFileLanguageEdited || sourceFileLanguage != file.SourceFileLanguage
+	file.Title, file.Author, file.SourceFileLanguage = title, author, sourceFileLanguage
+	return writeBookFile(path, file)
 }
 
 // SourceFile reads a Book's Source File and returns its on-disk name. A Book
@@ -691,6 +737,46 @@ func (s Store) book(seriesCode, bookCode string) (Series, Book, bool) {
 	return (Library{Series: []Series{series}}).Book(seriesCode, bookCode)
 }
 
+func (s Store) bookFile(seriesCode, bookCode string) (string, bookFile, error) {
+	if _, _, ok := s.book(seriesCode, bookCode); !ok {
+		return "", bookFile{}, fmt.Errorf("Book %q is not in Series %q", bookCode, seriesCode)
+	}
+	path := filepath.Join(s.root, seriesCode, BooksDir, bookCode, BookFile)
+	var file bookFile
+	if _, err := toml.DecodeFile(path, &file); err != nil {
+		return "", bookFile{}, fmt.Errorf("read %s: %w", filepath.Join(seriesCode, BooksDir, bookCode, BookFile), err)
+	}
+	return path, file, nil
+}
+
+func writeBookFile(path string, file bookFile) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", BookFile, err)
+	}
+	replacements := map[string]string{
+		"title":                       tomlString(file.Title),
+		"author":                      tomlString(file.Author),
+		"source_file_language":        tomlString(file.SourceFileLanguage),
+		"title_edited":                fmt.Sprintf("%t", file.TitleEdited),
+		"author_edited":               fmt.Sprintf("%t", file.AuthorEdited),
+		"source_file_language_edited": fmt.Sprintf("%t", file.SourceFileLanguageEdited),
+	}
+	lines := strings.Split(string(body), "\n")
+	for key, value := range replacements {
+		for i, line := range lines {
+			if strings.HasPrefix(strings.TrimSpace(line), key+" =") {
+				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+				lines[i] = indent + key + " = " + value
+				goto replaced
+			}
+		}
+		lines = append(lines, key+" = "+value)
+	replaced:
+	}
+	return writeAtomic(path, []byte(strings.Join(lines, "\n")))
+}
+
 // sourceFile finds the one Source File a Book may have. Both names are checked
 // explicitly so an unexpected user file is never mistaken for source material.
 func sourceFile(bookDir string) (string, error) {
@@ -838,7 +924,7 @@ func (s Store) writeSeries(code, name, sourceLanguage string) error {
 }
 
 func (s Store) writeBook(seriesCode string, book Book) error {
-	body := fmt.Sprintf(bookTemplate, tomlString(book.Title), tomlString(book.Author))
+	body := fmt.Sprintf(bookTemplate, tomlString(book.Title), tomlString(book.Author), tomlString(book.SourceFileLanguage), book.Title != "", book.Author != "", book.SourceFileLanguage != "")
 	return s.writeConfig(filepath.Join(seriesCode, BooksDir, book.Code, BookFile), body)
 }
 
@@ -899,6 +985,13 @@ const bookTemplate = `# A Book: one work, with one Source File. The folder this 
 
 title = %s
 author = %s
+source_file_language = %s
+
+# Values entered on the details page are protected from later Source File
+# parsing. They are machine-managed so an intentional blank is protected too.
+title_edited = %t
+author_edited = %t
+source_file_language_edited = %t
 
 # The Agent and Models are inherited from this Series and from workspace.toml.
 # Uncomment to spend more on this Book than on the rest, or less.

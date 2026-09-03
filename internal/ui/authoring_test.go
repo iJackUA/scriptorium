@@ -286,6 +286,224 @@ func TestBookDetailsUploadAndReplaceASourceFile(t *testing.T) {
 	}
 }
 
+func TestUploadingAnFB2SetsMetadataWithoutCallingTheAgent(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, err := store.CreateSeries("Imported books", "en")
+	if err != nil {
+		t.Fatalf("CreateSeries: %v", err)
+	}
+	if _, err := store.AddBook(series.Code, library.BookDraft{Code: "mystery"}); err != nil {
+		t.Fatalf("AddBook: %v", err)
+	}
+	fake := agent.NewFake()
+	s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return fake, nil })
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	source := `<?xml version="1.0"?><FictionBook><description><title-info><book-title>The Mystery</book-title><author><first-name>Ada</first-name><last-name>Lovell</last-name></author><lang>en</lang></title-info></description><body><section><p>Opening.</p></section></body></FictionBook>`
+	rec := postSourceFile(s, "/series/imported-books/books/mystery/source", "mystery.fb2", source, false)
+	if body := rec.Body.String(); !strings.Contains(body, "The Mystery") || !strings.Contains(body, "Ada Lovell") || !strings.Contains(body, "English (en)") {
+		t.Fatalf("uploaded FB2 metadata is not rendered:\n%s", body)
+	}
+	if requests := fake.RecordedRequests(); len(requests) != 0 {
+		t.Errorf("Agent requests = %d, want none", len(requests))
+	}
+
+	lib, err := store.Library()
+	if err != nil {
+		t.Fatalf("Library: %v", err)
+	}
+	_, book, ok := lib.Book(series.Code, "mystery")
+	if !ok {
+		t.Fatal("uploaded Book is missing")
+	}
+	if book.Title != "The Mystery" || book.Author != "Ada Lovell" || book.SourceFileLanguage != "en" {
+		t.Errorf("Book metadata = %+v, want title, author, language from the FB2", book)
+	}
+}
+
+func TestFB2WithoutReadableDescriptionLeavesMetadataEmpty(t *testing.T) {
+	for name, source := range map[string]string{
+		"missing description":   `<?xml version="1.0"?><FictionBook><body><section><p>Opening.</p></section></body></FictionBook>`,
+		"malformed description": `<?xml version="1.0"?><FictionBook><description><title-info><book-title>Broken</book-title></description><body></body></FictionBook>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			store := library.NewStore(root)
+			series, _ := store.CreateSeries("Imported books", "en")
+			_, _ = store.AddBook(series.Code, library.BookDraft{Code: "mystery"})
+			fake := agent.NewFake()
+			s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return fake, nil })
+			if err != nil {
+				t.Fatalf("newServer: %v", err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+
+			rec := postSourceFile(s, "/series/imported-books/books/mystery/source", "mystery.fb2", source, false)
+			if body := rec.Body.String(); strings.Contains(body, "form-problem") || !strings.Contains(body, "source.fb2") {
+				t.Fatalf("FB2 upload did not degrade gracefully:\n%s", body)
+			}
+			lib, err := store.Library()
+			if err != nil {
+				t.Fatalf("Library: %v", err)
+			}
+			_, book, _ := lib.Book(series.Code, "mystery")
+			if book.Title != "" || book.Author != "" || book.SourceFileLanguage != "" {
+				t.Errorf("Book metadata = %+v, want empty fields", book)
+			}
+			if requests := fake.RecordedRequests(); len(requests) != 0 {
+				t.Errorf("Agent requests = %d, want none", len(requests))
+			}
+		})
+	}
+}
+
+func TestReplacingUneditedMetadataWithAnUnreadableFB2ClearsIt(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Imported books", "en")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "mystery"})
+	fake := agent.NewFake(agent.Response{Result: `{"title":"Inferred","author":"Agent"}`})
+	s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return fake, nil })
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	path := "/series/imported-books/books/mystery/source"
+	postSourceFile(s, path, "mystery.txt", "Opening.", false)
+	postSourceFile(s, path, "mystery.fb2", `<FictionBook><description><title-info><book-title>Broken</book-title></description></FictionBook>`, true)
+
+	lib, err := store.Library()
+	if err != nil {
+		t.Fatalf("Library: %v", err)
+	}
+	_, book, _ := lib.Book(series.Code, "mystery")
+	if book.Title != "" || book.Author != "" || book.SourceFileLanguage != "" {
+		t.Errorf("metadata after unreadable FB2 = %+v, want empty fields", book)
+	}
+}
+
+func TestUploadingTextInfersMetadataWithTheMechanicalModel(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, err := store.CreateSeries("Imported books", "en")
+	if err != nil {
+		t.Fatalf("CreateSeries: %v", err)
+	}
+	if _, err := store.AddBook(series.Code, library.BookDraft{Code: "mystery"}); err != nil {
+		t.Fatalf("AddBook: %v", err)
+	}
+	fake := agent.NewFake(agent.Response{Result: `{"title":"The Text Mystery","author":"Ada Lovell"}`})
+	s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return fake, nil })
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	rec := postSourceFile(s, "/series/imported-books/books/mystery/source", "mystery.txt", "THE TEXT MYSTERY\nby Ada Lovell\n\nOpening.", false)
+	if body := rec.Body.String(); !strings.Contains(body, "The Text Mystery") || !strings.Contains(body, "Ada Lovell") {
+		t.Fatalf("inferred metadata is not rendered:\n%s", body)
+	}
+	requests := fake.RecordedRequests()
+	if len(requests) != 1 {
+		t.Fatalf("Agent requests = %d, want one", len(requests))
+	}
+	ws, _ := sessionFor(t, root).Current()
+	if requests[0].Model != ws.Config.Models.Mechanical || requests[0].Effort != agent.EffortLow {
+		t.Errorf("metadata request = %+v, want mechanical Model at low effort", requests[0])
+	}
+}
+
+func TestFailedTextInferenceLeavesEditableEmptyMetadata(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Imported books", "en")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "mystery"})
+	fake := agent.NewFake(agent.Response{IsError: true})
+	s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return fake, nil })
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+
+	rec := postSourceFile(s, "/series/imported-books/books/mystery/source", "mystery.txt", "Opening.", false)
+	if body := rec.Body.String(); strings.Contains(body, "form-problem") || !strings.Contains(body, "Save metadata") {
+		t.Fatalf("failed inference blocked editing:\n%s", body)
+	}
+	lib, err := store.Library()
+	if err != nil {
+		t.Fatalf("Library: %v", err)
+	}
+	_, book, _ := lib.Book(series.Code, "mystery")
+	if book.Title != "" || book.Author != "" || book.SourceFileLanguage != "" {
+		t.Errorf("Book metadata = %+v, want empty fields after failed inference", book)
+	}
+}
+
+func TestManualMetadataPersistsAndIsNotReplacedByLaterParsing(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Imported books", "en")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "mystery"})
+	fake := agent.NewFake()
+	s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return fake, nil })
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	path := "/series/imported-books/books/mystery"
+	first := `<?xml version="1.0"?><FictionBook><description><title-info><book-title>Imported</book-title><author><first-name>Ada</first-name><last-name>Lovell</last-name></author><lang>en</lang></title-info></description></FictionBook>`
+	postSourceFile(s, path+"/source", "mystery.fb2", first, false)
+	if rec := postForm(s, path+"/metadata", url.Values{"title": {"Corrected"}, "author": {"Editor"}, "source_file_language": {"uk"}}); !strings.Contains(rec.Body.String(), "Corrected") {
+		t.Fatalf("manual metadata edit was not rendered:\n%s", rec.Body.String())
+	}
+	second := `<?xml version="1.0"?><FictionBook><description><title-info><book-title>Reparsed</book-title><author><first-name>Other</first-name><last-name>Writer</last-name></author><lang>en</lang></title-info></description></FictionBook>`
+	postSourceFile(s, path+"/source", "mystery.fb2", second, true)
+
+	lib, err := store.Library()
+	if err != nil {
+		t.Fatalf("Library: %v", err)
+	}
+	_, book, _ := lib.Book(series.Code, "mystery")
+	if got := (library.BookMetadata{Title: book.Title, Author: book.Author, SourceFileLanguage: book.SourceFileLanguage}); got != (library.BookMetadata{Title: "Corrected", Author: "Editor", SourceFileLanguage: "uk"}) {
+		t.Errorf("metadata after reparse = %+v, want hand edits", got)
+	}
+	body := read(t, filepath.Join(root, series.Code, library.BooksDir, "mystery", library.BookFile))
+	if !strings.Contains(body, `title = "Corrected"`) || !strings.Contains(body, `source_file_language = "uk"`) {
+		t.Errorf("book.toml does not persist manual metadata:\n%s", body)
+	}
+}
+
+func TestMetadataFormProtectsOnlyTheFieldsThatChanged(t *testing.T) {
+	root := t.TempDir()
+	store := library.NewStore(root)
+	series, _ := store.CreateSeries("Imported books", "en")
+	_, _ = store.AddBook(series.Code, library.BookDraft{Code: "mystery"})
+	s, err := newServer(sessionFor(t, root), func(string, agent.Logger) (agent.Agent, error) { return agent.NewFake(), nil })
+	if err != nil {
+		t.Fatalf("newServer: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	path := "/series/imported-books/books/mystery"
+	first := `<?xml version="1.0"?><FictionBook><description><title-info><book-title>Imported</book-title><author><first-name>Ada</first-name><last-name>Lovell</last-name></author><lang>en</lang></title-info></description></FictionBook>`
+	postSourceFile(s, path+"/source", "mystery.fb2", first, false)
+	postForm(s, path+"/metadata", url.Values{"title": {"Corrected"}, "author": {"Ada Lovell"}, "source_file_language": {"en"}})
+	second := `<?xml version="1.0"?><FictionBook><description><title-info><book-title>Reparsed</book-title><author><first-name>Other</first-name><last-name>Writer</last-name></author><lang>uk</lang></title-info></description></FictionBook>`
+	postSourceFile(s, path+"/source", "mystery.fb2", second, true)
+
+	lib, err := store.Library()
+	if err != nil {
+		t.Fatalf("Library: %v", err)
+	}
+	_, book, _ := lib.Book(series.Code, "mystery")
+	if got := (library.BookMetadata{Title: book.Title, Author: book.Author, SourceFileLanguage: book.SourceFileLanguage}); got != (library.BookMetadata{Title: "Corrected", Author: "Other Writer", SourceFileLanguage: "uk"}) {
+		t.Errorf("metadata after reparse = %+v, want only corrected title retained", got)
+	}
+}
+
 func TestNewTranslationTargetWithASourceFileOffersDictionaryBuilding(t *testing.T) {
 	s, _ := newEmptyLibraryServer(t)
 	if rec := postForm(s, "/settings/target-languages", url.Values{"languages": {"uk"}}); strings.Contains(rec.Body.String(), "form-problem") {

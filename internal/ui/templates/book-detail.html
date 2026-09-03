@@ -4,11 +4,19 @@
     <h2 class="card-title text-title">{{.Book.Label}}</h2>
     {{template "form-problem" .Problem}}
     {{if .Notice}}<p class="text-success text-control" role="status">{{.Notice}}</p>{{end}}
-    {{with .Book.Author}}<p class="text-control text-base-content/60 -mt-2">{{.}}</p>{{end}}
+    <section class="flex flex-col gap-3">
+      <h3 class="section-label">Metadata</h3>
+      <form class="grid grid-cols-1 gap-3 sm:grid-cols-2" hx-post="/series/{{.Series.Code}}/books/{{.Book.Code}}/metadata" hx-target="#book-detail" hx-swap="innerHTML">
+        <label class="form-control"><span class="label-text">Title</span><input class="input w-full" name="title" value="{{.Book.Title}}"></label>
+        <label class="form-control"><span class="label-text">Author</span><input class="input w-full" name="author" value="{{.Book.Author}}"></label>
+        <label class="form-control"><span class="label-text">Source File language</span><select class="select w-full language-select" name="source_file_language"><option value="">Unknown</option>{{range .Languages}}<option value="{{.Tag}}" {{if eq $.Book.SourceFileLanguage .Tag}}selected{{end}}>{{.Name}} ({{.Tag}})</option>{{end}}</select></label>
+        <div class="flex items-end"><button class="btn btn-primary rounded-selector px-4" type="submit">Save metadata</button></div>
+      </form>
+    </section>
     <dl class="text-control grid grid-cols-[auto_1fr] gap-x-6 gap-y-1.5">
       <dt class="text-base-content/50">Book Code</dt><dd><code>{{.Book.Code}}</code></dd>
       <dt class="text-base-content/50">Series</dt><dd>{{.Series.Name}}</dd>
-      <dt class="text-base-content/50">Source language</dt><dd>{{languageName .Series.SourceLanguage}} ({{.Series.SourceLanguage}})</dd>
+      <dt class="text-base-content/50">Series source language</dt><dd>{{languageName .Series.SourceLanguage}} ({{.Series.SourceLanguage}})</dd>
     </dl>
 
     <section class="flex flex-col gap-3 border-t border-base-300 pt-4">
