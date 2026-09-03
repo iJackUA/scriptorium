@@ -72,6 +72,7 @@ type translationState struct {
 	SourceFile            string            `json:"source_file"`
 	SourceFingerprint     string            `json:"source_fingerprint"`
 	DictionaryFingerprint string            `json:"dictionary_fingerprint"`
+	Dictionary            []library.Term    `json:"dictionary"`
 	FailedChunks          int               `json:"failed_chunks"`
 	Chunks                []chunkState      `json:"chunks"`
 }
@@ -154,17 +155,30 @@ func (t Translator) PreparedTextChunksPresent(seriesCode, bookCode string) (bool
 	return false, nil
 }
 
-// Translate loads a prepared materialization, translates, persists, and
-// composes one Translation Target. It returns the final output path.
+// Translate loads a prepared materialization, resumes any incomplete work,
+// persists accepted Chunk Translations, and composes one Translation Target.
+// A completed target is composed again without contacting the Agent.
 func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetLanguage string) (string, error) {
-	if t.Agent == nil {
-		return "", errors.New("translation needs an Agent")
-	}
-	if strings.TrimSpace(t.TranslationModel) == "" {
-		return "", errors.New("translation needs a translation Model")
-	}
+	return t.resumeTranslation(ctx, seriesCode, bookCode, targetLanguage, false, true)
+}
+
+// ValidateAndRepair explicitly inspects persisted translated Chunk artifacts,
+// promotes valid files left by an interrupted process, and requests only the
+// missing, failed, or malformed Chunks. Nothing calls this during startup.
+func (t Translator) ValidateAndRepair(ctx context.Context, seriesCode, bookCode, targetLanguage string) (string, error) {
+	return t.resumeTranslation(ctx, seriesCode, bookCode, targetLanguage, false, false)
+}
+
+// RetryFailedChunks retries only Chunks recorded as failed. It does not turn
+// other pending Chunks into Agent requests; ValidateAndRepair can be used to
+// continue those later.
+func (t Translator) RetryFailedChunks(ctx context.Context, seriesCode, bookCode, targetLanguage string) (string, error) {
+	return t.resumeTranslation(ctx, seriesCode, bookCode, targetLanguage, true, false)
+}
+
+func (t Translator) resumeTranslation(ctx context.Context, seriesCode, bookCode, targetLanguage string, onlyFailed, validateOriginals bool) (string, error) {
 	store := library.NewStore(t.Root)
-	series, _, target, err := readyTarget(store, seriesCode, bookCode, targetLanguage)
+	series, _, target, err := translationTarget(store, seriesCode, bookCode, targetLanguage)
 	if err != nil {
 		return "", err
 	}
@@ -183,17 +197,37 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 
 	bookDirectory := filepath.Join(t.Root, seriesCode, library.BooksDir, bookCode)
 	targetDirectory := filepath.Join(bookDirectory, library.TranslationsDir, languagePair(series.SourceLanguage, target.Language))
-	manifest, err := loadPreparedMaterialization(bookDirectory, sourceName, source, document)
+	manifest, err := loadPreparedMaterialization(bookDirectory, sourceName, source, document, validateOriginals)
 	if err != nil {
 		return "", err
 	}
 	chunks := manifest.chunks
-	state, err := newTranslationState(sourceName, source, dictionary, manifest.manifest.Chunks)
+	statePath := filepath.Join(targetDirectory, library.StateFile)
+	state, existing, err := loadOrCreateTranslationState(statePath, sourceName, source, dictionary, manifest.manifest.Chunks)
 	if err != nil {
 		return "", err
 	}
+	if existing && len(state.Chunks) == 0 {
+		state, err = newTranslationState(sourceName, source, dictionary, manifest.manifest.Chunks)
+		if err != nil {
+			return "", err
+		}
+		existing = false
+	}
+	if existing && state.SourceFile != sourceName || existing && state.SourceFingerprint != fingerprint(source) {
+		return "", errors.New("Translation Target state belongs to a different Source File; prepare and translate it again")
+	}
+	if err := reconcileDictionary(&state, dictionary, chunks, targetDirectory); err != nil {
+		return "", err
+	}
+	wasFailed := make([]bool, len(chunks))
+	for i := range state.Chunks {
+		wasFailed[i] = state.Chunks[i].Status == chunkFailed
+	}
+	if err := reconcileTranslatedFiles(&state, chunks, targetDirectory); err != nil {
+		return "", err
+	}
 	state.Status = targetStateTranslating
-	statePath := filepath.Join(targetDirectory, library.StateFile)
 	if err := writeJSONAtomic(statePath, state); err != nil {
 		return "", err
 	}
@@ -205,10 +239,29 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 		if index == 0 || chunks[index-1].Chapter != chunk.Chapter {
 			continuity = continuityWindow{}
 		}
+		if state.Chunks[index].Status == chunkCompleted {
+			translated, err := readTranslatedChunk(targetDirectory, chunk)
+			if err != nil {
+				return "", err
+			}
+			continuity = continuityWindow{source: append([]format.TextNode(nil), chunk.Nodes...), translations: translated}
+			continue
+		}
+		if onlyFailed && !wasFailed[index] {
+			continuity = continuityWindow{}
+			continue
+		}
+		if t.Agent == nil {
+			return "", errors.New("translation needs an Agent")
+		}
+		if strings.TrimSpace(t.TranslationModel) == "" {
+			return "", errors.New("translation needs a translation Model")
+		}
 		translated, complete, attempts, cost, err := t.translateChunk(ctx, targetDirectory, sourceLanguage, targetLanguageInfo, dictionary, continuity, chunk)
-		state.Chunks[index].Attempts = attempts
-		state.Chunks[index].Cost = cost
+		state.Chunks[index].Attempts += attempts
+		state.Chunks[index].Cost += cost
 		if err != nil {
+			state.Chunks[index].Status = chunkFailed
 			state.FailedChunks = failedChunkCount(state.Chunks)
 			_ = writeJSONAtomic(statePath, state)
 			return "", fmt.Errorf("translate Chunk %d: %w", chunk.Index, err)
@@ -243,6 +296,13 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 		}
 		return "", fmt.Errorf("translation has %d failed Chunks; automatic Book Composition is blocked", state.FailedChunks)
 	}
+	for _, chunk := range state.Chunks {
+		if chunk.Status != chunkCompleted {
+			state.Status = targetStateFailed
+			_ = writeJSONAtomic(statePath, state)
+			return "", errors.New("translation remains incomplete; use Validate and Repair to continue")
+		}
+	}
 
 	output, err := composeFromPersisted(document, targetDirectory, chunks)
 	if err != nil {
@@ -258,6 +318,126 @@ func (t Translator) Translate(ctx context.Context, seriesCode, bookCode, targetL
 		return "", err
 	}
 	return outputPath, nil
+}
+
+func loadOrCreateTranslationState(path, sourceName string, source []byte, dictionary []library.Term, chunks []manifestChunk) (translationState, bool, error) {
+	state, err := loadTranslationState(path)
+	if errors.Is(err, os.ErrNotExist) {
+		fresh, freshErr := newTranslationState(sourceName, source, dictionary, chunks)
+		return fresh, false, freshErr
+	}
+	if err != nil {
+		return translationState{}, false, err
+	}
+	return state, true, nil
+}
+
+func reconcileDictionary(state *translationState, dictionary []library.Term, chunks []Chunk, targetDirectory string) error {
+	dictionaryBody, err := json.Marshal(dictionary)
+	if err != nil {
+		return fmt.Errorf("fingerprint Dictionary: %w", err)
+	}
+	newFingerprint := fingerprint(dictionaryBody)
+	if state.DictionaryFingerprint != "" && state.DictionaryFingerprint != newFingerprint {
+		changed := changedDictionaryOriginals(state.Dictionary, dictionary)
+		// Older state files have a fingerprint but no Dictionary snapshot. They
+		// cannot identify the affected Chunks safely, so invalidate all of them.
+		invalidateAll := state.Dictionary == nil
+		for index, chunk := range chunks {
+			if invalidateAll || chunkContainsTerm(chunk, changed) {
+				state.Chunks[index].Status = chunkPending
+				path := filepath.Join(targetDirectory, chunksDirectory, translatedChunksDirectory, chunkFileName(chunk.Index))
+				if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return fmt.Errorf("invalidate translated Chunk %d: %w", chunk.Index, err)
+				}
+			}
+		}
+	}
+	state.DictionaryFingerprint = newFingerprint
+	state.Dictionary = append([]library.Term{}, dictionary...)
+	return nil
+}
+
+func changedDictionaryOriginals(before, after []library.Term) map[string]bool {
+	oldTerms := make(map[string]library.Term, len(before))
+	newTerms := make(map[string]library.Term, len(after))
+	for _, term := range before {
+		oldTerms[term.Original] = term
+	}
+	for _, term := range after {
+		newTerms[term.Original] = term
+	}
+	changed := make(map[string]bool)
+	for original, term := range oldTerms {
+		if current, ok := newTerms[original]; !ok || current != term {
+			changed[original] = true
+		}
+	}
+	for original := range newTerms {
+		if _, ok := oldTerms[original]; !ok {
+			changed[original] = true
+		}
+	}
+	return changed
+}
+
+func chunkContainsTerm(chunk Chunk, terms map[string]bool) bool {
+	if len(terms) == 0 {
+		return false
+	}
+	for _, node := range chunk.Nodes {
+		for original := range terms {
+			if original != "" && strings.Contains(node.Text, original) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func reconcileTranslatedFiles(state *translationState, chunks []Chunk, targetDirectory string) error {
+	if len(state.Chunks) != len(chunks) {
+		return fmt.Errorf("Translation Target state has %d Chunks, want %d; validate and prepare again", len(state.Chunks), len(chunks))
+	}
+	for index, chunk := range chunks {
+		if state.Chunks[index].Index != chunk.Index || state.Chunks[index].SourceHash != fingerprint([]byte(SerializeNodes(chunk.Nodes))) {
+			return fmt.Errorf("Translation Target state does not match Chunk %d; validate and prepare again", chunk.Index)
+		}
+		path := filepath.Join(targetDirectory, chunksDirectory, translatedChunksDirectory, chunkFileName(chunk.Index))
+		body, err := os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				state.Chunks[index].Status = chunkPending
+				continue
+			}
+			return fmt.Errorf("read translated Chunk %d: %w", chunk.Index, err)
+		}
+		if _, err := ValidateTranslation(chunk.Nodes, string(body)); err == nil {
+			state.Chunks[index].Status = chunkCompleted
+			continue
+		}
+		if err := writeAtomic(filepath.Join(targetDirectory, chunksDirectory, rejectedChunksDirectory, chunkFileName(chunk.Index)), body); err != nil {
+			return fmt.Errorf("preserve rejected Chunk %d: %w", chunk.Index, err)
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("discard malformed translated Chunk %d: %w", chunk.Index, err)
+		}
+		state.Chunks[index].Status = chunkPending
+	}
+	state.FailedChunks = failedChunkCount(state.Chunks)
+	return nil
+}
+
+func readTranslatedChunk(targetDirectory string, chunk Chunk) ([]format.TextNode, error) {
+	body, err := os.ReadFile(filepath.Join(targetDirectory, chunksDirectory, translatedChunksDirectory, chunkFileName(chunk.Index)))
+	if err != nil {
+		return nil, fmt.Errorf("read translated Chunk %d: %w", chunk.Index, err)
+	}
+	translated, err := ValidateTranslation(chunk.Nodes, string(body))
+	if err != nil {
+		return nil, fmt.Errorf("validate translated Chunk %d: %w", chunk.Index, err)
+	}
+	return translated, nil
 }
 
 func (t Translator) translateChunk(ctx context.Context, targetDirectory string, sourceLanguage, targetLanguage workspace.Language, dictionary []library.Term, continuity continuityWindow, chunk Chunk) ([]format.TextNode, bool, int, float64, error) {
@@ -360,7 +540,7 @@ func (t Translator) ComposeTranslatedBook(seriesCode, bookCode, targetLanguage s
 		return "", fmt.Errorf("Book %q is not in Series %q", bookCode, seriesCode)
 	}
 	bookDirectory := filepath.Join(t.Root, seriesCode, library.BooksDir, bookCode)
-	manifest, err := loadPreparedMaterialization(bookDirectory, sourceName, source, document)
+	manifest, err := loadPreparedMaterialization(bookDirectory, sourceName, source, document, true)
 	if err != nil {
 		return "", err
 	}
@@ -401,7 +581,7 @@ func (t Translator) translationTargetDirectory(seriesCode, bookCode, targetLangu
 	return "", fmt.Errorf("Translation Target %q does not exist", targetLanguage)
 }
 
-func readyTarget(store library.Store, seriesCode, bookCode, targetLanguage string) (library.Series, library.Book, library.TranslationTarget, error) {
+func translationTarget(store library.Store, seriesCode, bookCode, targetLanguage string) (library.Series, library.Book, library.TranslationTarget, error) {
 	lib, err := store.Library()
 	if err != nil {
 		return library.Series{}, library.Book{}, library.TranslationTarget{}, err
@@ -414,8 +594,8 @@ func readyTarget(store library.Store, seriesCode, bookCode, targetLanguage strin
 		if target.Language != targetLanguage {
 			continue
 		}
-		if target.Status != library.StatusDictionaryReady {
-			return library.Series{}, library.Book{}, library.TranslationTarget{}, fmt.Errorf("Translation Target %q has Status %q, want %q", targetLanguage, target.Status, library.StatusDictionaryReady)
+		if target.Status == library.StatusNew || target.Status == library.StatusAnalyzing {
+			return library.Series{}, library.Book{}, library.TranslationTarget{}, fmt.Errorf("Translation Target %q has Status %q; Dictionary Building must finish first", targetLanguage, target.Status)
 		}
 		return series, book, target, nil
 	}
@@ -468,7 +648,7 @@ func materializeChunks(bookDirectory, sourceName string, source []byte, chapters
 	return manifest, nil
 }
 
-func loadPreparedMaterialization(bookDirectory, sourceName string, source []byte, document format.Document) (preparedMaterialization, error) {
+func loadPreparedMaterialization(bookDirectory, sourceName string, source []byte, document format.Document, validateOriginals bool) (preparedMaterialization, error) {
 	manifestPath := filepath.Join(bookDirectory, chunksDirectory, manifestFile)
 	body, err := os.ReadFile(manifestPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -494,31 +674,40 @@ func loadPreparedMaterialization(bookDirectory, sourceName string, source []byte
 		if entry.Index != position || len(entry.TextNodes) == 0 {
 			return preparedMaterialization{}, fmt.Errorf("Chunk Materialization manifest has invalid Chunk %d", position)
 		}
-		path := filepath.Join(bookDirectory, chunksDirectory, originalChunksDirectory, chunkFileName(entry.Index))
-		chunkBody, err := os.ReadFile(path)
-		if err != nil {
-			return preparedMaterialization{}, fmt.Errorf("read original Chunk %d: %w", entry.Index, err)
-		}
-		if fingerprint(chunkBody) != entry.SourceHash {
-			return preparedMaterialization{}, fmt.Errorf("original Chunk %d has changed; prepare Text Chunks again", entry.Index)
-		}
-		parsed, err := parseNumberedNodes(string(chunkBody))
-		if err != nil || len(parsed) != len(entry.TextNodes) {
-			return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: invalid numbered Text Nodes", entry.Index)
-		}
-		chunkNodes := make([]format.TextNode, len(parsed))
-		for nodePosition, parsedNode := range parsed {
-			if parsedNode.Index != entry.TextNodes[nodePosition] || seenNodes[parsedNode.Index] {
-				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: invalid Text Node index %d", entry.Index, parsedNode.Index)
+		var parsed []format.TextNode
+		if validateOriginals {
+			path := filepath.Join(bookDirectory, chunksDirectory, originalChunksDirectory, chunkFileName(entry.Index))
+			chunkBody, err := os.ReadFile(path)
+			if err != nil {
+				return preparedMaterialization{}, fmt.Errorf("read original Chunk %d: %w", entry.Index, err)
 			}
-			original, ok := sourceNodes[parsedNode.Index]
-			if !ok || parsedNode.Text != original.Text {
-				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: Text Node %d does not match the Source File", entry.Index, parsedNode.Index)
+			if fingerprint(chunkBody) != entry.SourceHash {
+				return preparedMaterialization{}, fmt.Errorf("original Chunk %d has changed; prepare Text Chunks again", entry.Index)
+			}
+			parsed, err = parseNumberedNodes(string(chunkBody))
+			if err != nil || len(parsed) != len(entry.TextNodes) {
+				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: invalid numbered Text Nodes", entry.Index)
+			}
+		}
+		chunkNodes := make([]format.TextNode, len(entry.TextNodes))
+		for nodePosition, nodeIndex := range entry.TextNodes {
+			if seenNodes[nodeIndex] {
+				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: invalid Text Node index %d", entry.Index, nodeIndex)
+			}
+			if validateOriginals && parsed[nodePosition].Index != nodeIndex {
+				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: invalid Text Node index %d", entry.Index, nodeIndex)
+			}
+			original, ok := sourceNodes[nodeIndex]
+			if !ok {
+				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: Text Node %d does not match the Source File", entry.Index, nodeIndex)
 			}
 			if entry.Chapter != original.Chapter {
 				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: Chapter boundary changed", entry.Index)
 			}
-			seenNodes[parsedNode.Index] = true
+			if validateOriginals && parsed[nodePosition].Text != original.Text {
+				return preparedMaterialization{}, fmt.Errorf("validate original Chunk %d: Text Node %d does not match the Source File", entry.Index, nodeIndex)
+			}
+			seenNodes[nodeIndex] = true
 			chunkNodes[nodePosition] = original
 		}
 		chunks = append(chunks, Chunk{Index: entry.Index, Chapter: entry.Chapter, Nodes: chunkNodes})
@@ -536,6 +725,7 @@ func newTranslationState(sourceName string, source []byte, dictionary []library.
 	}
 	state := translationState{
 		SourceFile: sourceName, SourceFingerprint: fingerprint(source), DictionaryFingerprint: fingerprint(dictionaryBody),
+		Dictionary: append([]library.Term{}, dictionary...),
 	}
 	for _, chunk := range chunks {
 		state.Chunks = append(state.Chunks, chunkState{Index: chunk.Index, Status: chunkPending, SourceHash: chunk.SourceHash})

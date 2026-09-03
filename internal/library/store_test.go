@@ -90,6 +90,50 @@ func TestCreatingATranslationTargetWritesNewState(t *testing.T) {
 	}
 }
 
+func TestReplacingSourceFileDiscardsChunkMaterializationAndTranslations(t *testing.T) {
+	s := store(t)
+	series, err := s.CreateSeries("Solaris", "en")
+	if err != nil {
+		t.Fatalf("CreateSeries: %v", err)
+	}
+	if _, err := s.AddBook(series.Code, BookDraft{Code: "solaris"}); err != nil {
+		t.Fatalf("AddBook: %v", err)
+	}
+	if err := s.UploadSourceFile(series.Code, "solaris", "source.txt", strings.NewReader("old"), false); err != nil {
+		t.Fatalf("UploadSourceFile: %v", err)
+	}
+	bookDir := filepath.Join(s.root, series.Code, BooksDir, "solaris")
+	if err := os.MkdirAll(filepath.Join(bookDir, ChunksDir, "original"), 0o755); err != nil {
+		t.Fatalf("seed Chunks: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(bookDir, TranslationsDir, "en-to-uk", "chunks"), 0o755); err != nil {
+		t.Fatalf("seed translations: %v", err)
+	}
+	for _, path := range []string{
+		filepath.Join(bookDir, ChunksDir, "manifest.json"),
+		filepath.Join(bookDir, ChunksDir, "original", "0.txt"),
+		filepath.Join(bookDir, TranslationsDir, "en-to-uk", "state.json"),
+	} {
+		body := []byte("artifact")
+		if strings.HasSuffix(path, StateFile) {
+			body = []byte(`{"status":"new"}`)
+		}
+		if err := os.WriteFile(path, body, 0o644); err != nil {
+			t.Fatalf("seed %s: %v", path, err)
+		}
+	}
+
+	if err := s.UploadSourceFile(series.Code, "solaris", "replacement.txt", strings.NewReader("new"), true); err != nil {
+		t.Fatalf("replace Source File: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bookDir, ChunksDir)); !os.IsNotExist(err) {
+		t.Errorf("Chunk Materialization still exists: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bookDir, TranslationsDir)); !os.IsNotExist(err) {
+		t.Errorf("translations still exist: %v", err)
+	}
+}
+
 func TestDictionaryBuildingStateAndDictionaryArePersistedPerTranslationTarget(t *testing.T) {
 	s := store(t)
 	series, _ := s.CreateSeries("Solaris", "pl")

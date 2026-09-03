@@ -34,6 +34,8 @@ const (
 	DictionariesDir = "dictionaries"
 	// SourceFilePrefix is the filename before a Source File's extension.
 	SourceFilePrefix = "source"
+	// ChunksDir is the Book-level Chunk Materialization directory.
+	ChunksDir = "chunks"
 )
 
 var (
@@ -348,6 +350,9 @@ func (s Store) UploadSourceFile(seriesCode, bookCode, filename string, source io
 	if existing != "" {
 		if err := os.RemoveAll(filepath.Join(bookDir, TranslationsDir)); err != nil {
 			return fmt.Errorf("discard translation work: %w", err)
+		}
+		if err := os.RemoveAll(filepath.Join(bookDir, ChunksDir)); err != nil {
+			return fmt.Errorf("discard Chunk Materialization: %w", err)
 		}
 		if existing != SourceFilePrefix+extension {
 			if err := os.Remove(filepath.Join(bookDir, existing)); err != nil {

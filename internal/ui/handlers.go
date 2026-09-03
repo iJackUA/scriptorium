@@ -86,6 +86,8 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/stop", s.stopDictionaryBuilding)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/chunks", s.prepareTextChunks)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/translate", s.startTranslation)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/validate-repair", s.validateAndRepair)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/retry-failed", s.retryFailedChunks)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary.tsv", s.bookDictionaryTSV)
 	mux.HandleFunc("GET /series/{series}/dictionaries/{target}", s.seriesDictionaryTSV)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary/review", s.dictionaryReview)
@@ -380,15 +382,61 @@ func (s screens) startTranslation(w http.ResponseWriter, r *http.Request) {
 	s.bookDetail(w, r)
 }
 
+func (s screens) validateAndRepair(w http.ResponseWriter, r *http.Request) {
+	s.startRepair(w, r, false)
+}
+
+func (s screens) retryFailedChunks(w http.ResponseWriter, r *http.Request) {
+	s.startRepair(w, r, true)
+}
+
+func (s screens) startRepair(w http.ResponseWriter, r *http.Request, onlyFailed bool) {
+	store, ok := s.store(w, r)
+	if !ok {
+		return
+	}
+	ws, ok := s.session.Current()
+	if !ok {
+		s.reply(w, r, form{})
+		return
+	}
+	seriesCode, bookCode, targetLanguage := r.PathValue("series"), r.PathValue("book"), r.PathValue("target")
+	lib, err := store.Library()
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	series, book, found := lib.Book(seriesCode, bookCode)
+	if !found {
+		http.NotFound(w, r)
+		return
+	}
+	for _, target := range book.Targets {
+		if target.Language != targetLanguage {
+			continue
+		}
+		if target.Status == library.StatusNew || target.Status == library.StatusAnalyzing {
+			s.detail(w, r, "Dictionary Building must finish before repairing translation Chunks")
+			return
+		}
+		go s.repairBook(ws, series, book, targetLanguage, onlyFailed)
+		s.bookDetail(w, r)
+		return
+	}
+	http.NotFound(w, r)
+}
+
 func (s screens) translateBook(ws workspace.Workspace, series library.Series, book library.Book, targetLanguage string) {
 	transcript, err := agent.NewFileLogger(filepath.Join(ws.Root, "logs", "agent-transcript.jsonl"))
 	if err != nil {
 		log.Printf("translation for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
+		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
 		return
 	}
 	client, err := s.agents(ws.Config.Agent, transcript)
 	if err != nil {
 		log.Printf("translation for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
+		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
 		return
 	}
 	_, err = (translation.Translator{
@@ -398,9 +446,38 @@ func (s screens) translateBook(ws workspace.Workspace, series library.Series, bo
 	}).Translate(context.Background(), series.Code, book.Code, targetLanguage)
 	if err != nil {
 		log.Printf("translation for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
-		if statusErr := library.NewStore(ws.Root).SetTranslationTargetStatus(series.Code, book.Code, targetLanguage, library.StatusFailed); statusErr != nil {
-			log.Printf("record translation failure: %v", statusErr)
-		}
+		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
+	}
+}
+
+func (s screens) repairBook(ws workspace.Workspace, series library.Series, book library.Book, targetLanguage string, onlyFailed bool) {
+	transcript, err := agent.NewFileLogger(filepath.Join(ws.Root, "logs", "agent-transcript.jsonl"))
+	if err != nil {
+		log.Printf("translation repair for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
+		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
+		return
+	}
+	client, err := s.agents(ws.Config.Agent, transcript)
+	if err != nil {
+		log.Printf("translation repair for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
+		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
+		return
+	}
+	translator := translation.Translator{Root: ws.Root, Agent: client, TranslationModel: ws.Config.Models.Translation}
+	if onlyFailed {
+		_, err = translator.RetryFailedChunks(context.Background(), series.Code, book.Code, targetLanguage)
+	} else {
+		_, err = translator.ValidateAndRepair(context.Background(), series.Code, book.Code, targetLanguage)
+	}
+	if err != nil {
+		log.Printf("translation repair for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
+		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
+	}
+}
+
+func (s screens) recordTranslationFailure(root string, series library.Series, book library.Book, targetLanguage string, cause error) {
+	if err := library.NewStore(root).SetTranslationTargetStatus(series.Code, book.Code, targetLanguage, library.StatusFailed); err != nil {
+		log.Printf("record translation failure after %v: %v", cause, err)
 	}
 }
 

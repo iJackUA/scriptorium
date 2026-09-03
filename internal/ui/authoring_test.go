@@ -346,6 +346,30 @@ func TestPrepareTextChunksActionPersistsBookChunks(t *testing.T) {
 	}
 }
 
+func TestCompletedAndFailedTargetsOfferExplicitRepairActions(t *testing.T) {
+	body, err := execute("book-detail", bookDetailData{
+		Series: library.Series{Code: "series", Name: "Series", SourceLanguage: "en"},
+		Book: library.Book{Code: "book", SourceFile: "source.txt", Targets: []library.TranslationTarget{
+			{Language: "uk", Status: library.StatusTranslated},
+			{Language: "de", Status: library.StatusFailed},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("render repair actions: %v", err)
+	}
+	if strings.Count(body, "Validate and Repair") != 2 {
+		t.Errorf("Validate and Repair buttons = %d, want two", strings.Count(body, "Validate and Repair"))
+	}
+	if strings.Count(body, "Retry failed Chunks") != 1 {
+		t.Errorf("Retry failed Chunks buttons = %d, want one", strings.Count(body, "Retry failed Chunks"))
+	}
+	for _, want := range []string{"/targets/uk/validate-repair", "/targets/de/validate-repair", "/targets/de/retry-failed"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("repair action markup is missing %q", want)
+		}
+	}
+}
+
 func TestStartTranslationRefusesToRunWithoutPreparedChunks(t *testing.T) {
 	root := t.TempDir()
 	store := library.NewStore(root)

@@ -370,6 +370,213 @@ func TestTranslatorPersistsAcceptedChunkBeforeMarkingItCompleted(t *testing.T) {
 	}
 }
 
+func TestTranslatorRerunOfCompletedTargetRequestsNothing(t *testing.T) {
+	fixture := newReadyTarget(t, "Rerun", "en", "rerun", "uk", "rerun.txt", []byte("Source."))
+	if _, err := (Translator{Root: fixture.root}).PrepareTextChunks(fixture.series.Code, "rerun"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	firstAgent := agent.NewFake(agent.Response{Result: "[[NODE 0]]\nПереклад.\n[[/NODE]]", Cost: 0.4})
+	translator := Translator{Root: fixture.root, Agent: firstAgent, TranslationModel: "strong"}
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "rerun", "uk"); err != nil {
+		t.Fatalf("first Translate: %v", err)
+	}
+
+	secondAgent := agent.NewFake()
+	translator.Agent = secondAgent
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "rerun", "uk"); err != nil {
+		t.Fatalf("rerun Translate: %v", err)
+	}
+	if got := len(secondAgent.RecordedRequests()); got != 0 {
+		t.Fatalf("rerun requests = %d, want none", got)
+	}
+	state := readTranslationState(t, fixture.root, fixture.series.Code, "rerun", "uk")
+	if state.Chunks[0].Cost != 0.4 || state.Chunks[0].Attempts != 1 {
+		t.Errorf("rerun state = %+v, want accumulated original cost and attempts", state.Chunks[0])
+	}
+}
+
+func TestValidateAndRepairPromotesAnAcceptedChunkLeftBeforeStateUpdate(t *testing.T) {
+	fixture := newReadyTarget(t, "Promote", "en", "promote", "uk", "promote.txt", []byte("Source."))
+	if _, err := (Translator{Root: fixture.root}).PrepareTextChunks(fixture.series.Code, "promote"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	first := agent.NewFake(agent.Response{Result: "[[NODE 0]]\nПереклад.\n[[/NODE]]", Cost: 0.7})
+	translator := Translator{Root: fixture.root, Agent: first, TranslationModel: "strong"}
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "promote", "uk"); err != nil {
+		t.Fatalf("first Translate: %v", err)
+	}
+
+	statePath := filepath.Join(fixture.root, fixture.series.Code, library.BooksDir, "promote", library.TranslationsDir, "en-to-uk", library.StateFile)
+	body := readFile(t, statePath)
+	body = strings.Replace(body, `"status": "translated"`, `"status": "translating"`, 1)
+	body = strings.Replace(body, `"status": "completed"`, `"status": "pending"`, 1)
+	if err := os.WriteFile(statePath, []byte(body), 0o644); err != nil {
+		t.Fatalf("write interrupted state: %v", err)
+	}
+
+	second := agent.NewFake()
+	translator.Agent = second
+	if _, err := translator.ValidateAndRepair(context.Background(), fixture.series.Code, "promote", "uk"); err != nil {
+		t.Fatalf("ValidateAndRepair: %v", err)
+	}
+	if got := len(second.RecordedRequests()); got != 0 {
+		t.Fatalf("repair requests = %d, want none", got)
+	}
+	state := readTranslationState(t, fixture.root, fixture.series.Code, "promote", "uk")
+	if state.Status != string(targetStateTranslated) || state.Chunks[0].Status != string(chunkCompleted) {
+		t.Errorf("repaired state = %+v, want translated/completed", state)
+	}
+}
+
+func TestValidateAndRepairDoesNotValidateOriginalChunkArtifacts(t *testing.T) {
+	fixture := newReadyTarget(t, "Original Artifact", "en", "original-artifact", "uk", "original-artifact.txt", []byte("Source."))
+	if _, err := (Translator{Root: fixture.root}).PrepareTextChunks(fixture.series.Code, "original-artifact"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	translator := Translator{Root: fixture.root, Agent: agent.NewFake(agent.Response{Result: "[[NODE 0]]\nПереклад.\n[[/NODE]]"}), TranslationModel: "strong"}
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "original-artifact", "uk"); err != nil {
+		t.Fatalf("first Translate: %v", err)
+	}
+	originalPath := filepath.Join(fixture.root, fixture.series.Code, library.BooksDir, "original-artifact", chunksDirectory, originalChunksDirectory, "0.txt")
+	if err := os.WriteFile(originalPath, []byte("user inspection edit"), 0o644); err != nil {
+		t.Fatalf("edit original Chunk: %v", err)
+	}
+	if _, err := translator.ValidateAndRepair(context.Background(), fixture.series.Code, "original-artifact", "uk"); err != nil {
+		t.Fatalf("ValidateAndRepair: %v", err)
+	}
+}
+
+func TestDictionaryEditInvalidatesOnlyChunksContainingChangedTerm(t *testing.T) {
+	source := []byte("Ocean appears here.\n\nForest appears here.")
+	fixture := newReadyTarget(t, "Dictionary Invalidation", "en", "invalidate", "uk", "invalidate.txt", source)
+	if _, err := (Translator{Root: fixture.root, ChunkWordBudget: 2}).PrepareTextChunks(fixture.series.Code, "invalidate"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	first := agent.NewFake(
+		agent.Response{Result: "[[NODE 0]]\nОкеан тут.\n[[/NODE]]", Cost: 0.1},
+		agent.Response{Result: "[[NODE 1]]\nЛіс тут.\n[[/NODE]]", Cost: 0.2},
+	)
+	translator := Translator{Root: fixture.root, Agent: first, TranslationModel: "strong", ChunkWordBudget: 2}
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "invalidate", "uk"); err != nil {
+		t.Fatalf("first Translate: %v", err)
+	}
+	if err := fixture.store.UpdateBookDictionaryTSV(fixture.series.Code, "invalidate", "uk", []byte("original\ttranslation\tnote\nOcean\tМоре\tchanged\n")); err != nil {
+		t.Fatalf("UpdateBookDictionaryTSV: %v", err)
+	}
+	second := agent.NewFake(agent.Response{Result: "[[NODE 0]]\nМоре тут.\n[[/NODE]]", Cost: 0.3})
+	translator.Agent = second
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "invalidate", "uk"); err != nil {
+		t.Fatalf("rerun Translate: %v", err)
+	}
+	if got := len(second.RecordedRequests()); got != 1 {
+		t.Fatalf("dictionary invalidation requests = %d, want one", got)
+	}
+	if !strings.Contains(second.RecordedRequests()[0].Prompt, "Море") {
+		t.Error("affected Chunk request does not contain the updated Dictionary")
+	}
+}
+
+func TestRetryFailedChunksRequestsOnlyTheFailedChunk(t *testing.T) {
+	source := []byte("First source.\n\nSecond source.")
+	fixture := newReadyTarget(t, "Retry Failed", "en", "retry-failed", "uk", "retry-failed.txt", source)
+	if _, err := (Translator{Root: fixture.root, ChunkWordBudget: 1}).PrepareTextChunks(fixture.series.Code, "retry-failed"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	first := agent.NewFake(
+		agent.Response{Result: "[[NODE 99]]\nWrong.\n[[/NODE]]"},
+		agent.Response{Result: "[[NODE 0]]\nStill wrong."},
+		agent.Response{Result: "[[NODE 0]]\nStill wrong."},
+		agent.Response{Result: "[[NODE 1]]\nПізніше.\n[[/NODE]]"},
+	)
+	translator := Translator{Root: fixture.root, Agent: first, TranslationModel: "strong", ChunkWordBudget: 1}
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "retry-failed", "uk"); err == nil {
+		t.Fatal("first Translate error = nil, want failed Chunk")
+	}
+	second := agent.NewFake(agent.Response{Result: "[[NODE 0]]\nПерший.\n[[/NODE]]"})
+	translator.Agent = second
+	if _, err := translator.RetryFailedChunks(context.Background(), fixture.series.Code, "retry-failed", "uk"); err != nil {
+		t.Fatalf("RetryFailedChunks: %v", err)
+	}
+	if got := len(second.RecordedRequests()); got != 1 {
+		t.Fatalf("retry requests = %d, want one", got)
+	}
+	if strings.Contains(second.RecordedRequests()[0].Prompt, "Later") || !strings.Contains(second.RecordedRequests()[0].Prompt, "First source") {
+		t.Error("retry request was not for the failed first Chunk")
+	}
+}
+
+func TestValidateAndRepairRequestsOnlyTheIncompleteMidBookChunk(t *testing.T) {
+	source := []byte("First source.\n\nSecond source.\n\nThird source.")
+	fixture := newReadyTarget(t, "Mid-book Repair", "en", "mid-book", "uk", "mid-book.txt", source)
+	if _, err := (Translator{Root: fixture.root, ChunkWordBudget: 1}).PrepareTextChunks(fixture.series.Code, "mid-book"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	first := agent.NewFake(
+		agent.Response{Result: "[[NODE 0]]\nПерший.\n[[/NODE]]"},
+		agent.Response{Result: "[[NODE 99]]\nWrong.\n[[/NODE]]"},
+		agent.Response{Result: "[[NODE 1]]\nStill wrong."},
+		agent.Response{Result: "[[NODE 1]]\nStill wrong."},
+		agent.Response{Result: "[[NODE 2]]\nТретій.\n[[/NODE]]"},
+	)
+	translator := Translator{Root: fixture.root, Agent: first, TranslationModel: "strong", ChunkWordBudget: 1}
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "mid-book", "uk"); err == nil {
+		t.Fatal("first Translate error = nil, want failed middle Chunk")
+	}
+
+	repair := agent.NewFake(agent.Response{Result: "[[NODE 1]]\nДругий.\n[[/NODE]]"})
+	translator.Agent = repair
+	if _, err := translator.ValidateAndRepair(context.Background(), fixture.series.Code, "mid-book", "uk"); err != nil {
+		t.Fatalf("ValidateAndRepair: %v", err)
+	}
+	if got := len(repair.RecordedRequests()); got != 1 {
+		t.Fatalf("repair requests = %d, want only incomplete middle Chunk", got)
+	}
+	if prompt := repair.RecordedRequests()[0].Prompt[strings.LastIndex(repair.RecordedRequests()[0].Prompt, "TEXT NODES TO TRANSLATE:"):]; !strings.Contains(prompt, "Second source") || strings.Contains(prompt, "First source") || strings.Contains(prompt, "Third source") {
+		t.Errorf("repair prompt was not limited to the middle Chunk: %s", prompt)
+	}
+}
+
+func TestValidateAndRepairPreservesMalformedChunkAndUsesValidManualEdit(t *testing.T) {
+	fixture := newReadyTarget(t, "Manual Chunks", "en", "manual", "uk", "manual.txt", []byte("First source.\n\nSecond source."))
+	if _, err := (Translator{Root: fixture.root, ChunkWordBudget: 1}).PrepareTextChunks(fixture.series.Code, "manual"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	first := agent.NewFake(
+		agent.Response{Result: "[[NODE 0]]\nПерший.\n[[/NODE]]"},
+		agent.Response{Result: "[[NODE 1]]\nДругий.\n[[/NODE]]"},
+	)
+	translator := Translator{Root: fixture.root, Agent: first, TranslationModel: "strong", ChunkWordBudget: 1}
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "manual", "uk"); err != nil {
+		t.Fatalf("first Translate: %v", err)
+	}
+	targetDirectory := filepath.Join(fixture.root, fixture.series.Code, library.BooksDir, "manual", library.TranslationsDir, "en-to-uk")
+	if err := os.WriteFile(filepath.Join(targetDirectory, chunksDirectory, translatedChunksDirectory, "0.txt"), []byte("malformed"), 0o644); err != nil {
+		t.Fatalf("write malformed translated Chunk: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDirectory, chunksDirectory, translatedChunksDirectory, "1.txt"), []byte("[[NODE 1]]\nРучна правка.\n[[/NODE]]"), 0o644); err != nil {
+		t.Fatalf("write manual translated Chunk: %v", err)
+	}
+	second := agent.NewFake(agent.Response{Result: "[[NODE 0]]\nПовторно.\n[[/NODE]]"})
+	translator.Agent = second
+	if _, err := translator.ValidateAndRepair(context.Background(), fixture.series.Code, "manual", "uk"); err != nil {
+		t.Fatalf("ValidateAndRepair: %v", err)
+	}
+	if got := len(second.RecordedRequests()); got != 1 {
+		t.Fatalf("repair requests = %d, want malformed Chunk only", got)
+	}
+	rejected, err := os.ReadFile(filepath.Join(targetDirectory, chunksDirectory, rejectedChunksDirectory, "0.txt"))
+	if err != nil || string(rejected) != "malformed" {
+		t.Errorf("rejected malformed Chunk = %q, read error = %v", rejected, err)
+	}
+	output, err := os.ReadFile(filepath.Join(targetDirectory, outputDirectory, "manual.uk.txt"))
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if string(output) != "Повторно.\n\nРучна правка." {
+		t.Errorf("output = %q, want repaired and manually edited Chunks", output)
+	}
+}
+
 func TestTranslatorRetriesARejectedChunkOnceWithAStrictInstruction(t *testing.T) {
 	source := []byte("A source paragraph.")
 	fixture := newReadyTarget(t, "Retry", "en", "retry", "uk", "retry.txt", source)

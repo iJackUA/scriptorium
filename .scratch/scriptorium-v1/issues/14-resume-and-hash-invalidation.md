@@ -19,3 +19,8 @@ The user can also retry only the Chunks that failed, without re-translating the 
 - [ ] Resumption preserves accumulated cost rather than resetting it
 - [ ] A malformed translated Chunk is preserved as the latest rejected response and is not used for Book Composition
 - [ ] A valid manually edited translated Chunk is used without retranslation
+
+## Comments
+
+- Implemented persisted resumption and explicit Validate and Repair / Retry failed Chunks actions. Added coverage for crash promotion, Dictionary invalidation, failed-only retry, malformed-response preservation, valid manual edits, cost accumulation, completed reruns, Source File replacement cleanup, and repair controls.
+- UI verification: `make headless` served the loopback twin and `curl` confirmed the application page rendered successfully. The in-app browser backend was unavailable in this environment, so browser interaction/screenshot verification could not run; handler/template tests confirmed the visible **Validate and Repair** and **Retry failed Chunks** controls and their routes.
