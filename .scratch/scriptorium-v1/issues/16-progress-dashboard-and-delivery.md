@@ -20,3 +20,7 @@ When every Chunk Translation is valid, Book Composition runs automatically and p
 - [ ] An open-folder button reveals the output directory, routed through a single platform shim function
 - [ ] Handlers stay thin adapters over the service layer; they carry no pipeline logic
 - [ ] A dropped SSE connection reconnects and resyncs rather than freezing the display
+
+## Comments
+
+2026-09-03: Implemented durable translation progress and cost snapshots, cancellable translation runs, SSE progress streams for Dictionary Building and translation (each sends the current snapshot on reconnect), diagnostic composition, output-folder reveal routing, and dashboard controls. `make check` passes. Started `make headless` at `http://127.0.0.1:52356`; visual verification could not be completed because the available in-app browser backend reported no discoverable IAB backend. Focused HTTP/UI and service tests cover the rendered and service seams.

@@ -28,3 +28,10 @@ type FolderPicker interface {
 	// is the implementation that knows what kind of dialog it is putting up.
 	PickFolder() (string, error)
 }
+
+// FolderRevealer opens a folder in the host file manager. It is deliberately
+// separate from FolderPicker: the server needs only this one platform action
+// once a translated Book exists.
+type FolderRevealer interface {
+	RevealFolder(string) error
+}

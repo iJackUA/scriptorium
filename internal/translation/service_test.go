@@ -395,6 +395,27 @@ func TestTranslatorRerunOfCompletedTargetRequestsNothing(t *testing.T) {
 	}
 }
 
+func TestTranslationProgressReportsDurableCompletedChunksAndAccumulatedCost(t *testing.T) {
+	fixture := newReadyTarget(t, "Progress", "en", "progress", "uk", "progress.txt", []byte("First.\n\nSecond."))
+	if _, err := (Translator{Root: fixture.root, ChunkWordBudget: 1}).PrepareTextChunks(fixture.series.Code, "progress"); err != nil {
+		t.Fatalf("PrepareTextChunks: %v", err)
+	}
+	translator := Translator{Root: fixture.root, Agent: agent.NewFake(
+		agent.Response{Result: "[[NODE 0]]\nПерший.\n[[/NODE]]", Cost: 0.2},
+		agent.Response{Result: "[[NODE 1]]\nДругий.\n[[/NODE]]", Cost: 0.3},
+	), TranslationModel: "strong"}
+	if _, err := translator.Translate(context.Background(), fixture.series.Code, "progress", "uk"); err != nil {
+		t.Fatalf("Translate: %v", err)
+	}
+	progress, err := (Translator{Root: fixture.root}).TranslationProgress(fixture.series.Code, "progress", "uk")
+	if err != nil {
+		t.Fatalf("TranslationProgress: %v", err)
+	}
+	if got, want := progress, (Progress{Completed: 2, Total: 2, Cost: 0.5}); got != want {
+		t.Errorf("TranslationProgress = %+v, want %+v", got, want)
+	}
+}
+
 func TestValidateAndRepairPromotesAnAcceptedChunkLeftBeforeStateUpdate(t *testing.T) {
 	fixture := newReadyTarget(t, "Promote", "en", "promote", "uk", "promote.txt", []byte("Source."))
 	if _, err := (Translator{Root: fixture.root}).PrepareTextChunks(fixture.series.Code, "promote"); err != nil {

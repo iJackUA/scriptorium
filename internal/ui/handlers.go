@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
@@ -12,8 +13,10 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/ijackua/scriptorium/internal/agent"
+	"github.com/ijackua/scriptorium/internal/desktop"
 	"github.com/ijackua/scriptorium/internal/format"
 	"github.com/ijackua/scriptorium/internal/format/fb2"
 	"github.com/ijackua/scriptorium/internal/format/txt"
@@ -44,6 +47,9 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 		}
 		return false
 	},
+	"translationProgressData": func(seriesCode, bookCode, language string, status library.Status, progress translation.Progress) translationProgressData {
+		return translationProgressData{SeriesCode: seriesCode, BookCode: bookCode, Language: language, Status: status, Progress: progress}
+	},
 }).ParseFS(templateFS, "templates/*.html"))
 
 // routes wires the handler tree. Handlers are deliberately thin adapters over
@@ -53,8 +59,12 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 // They hang off a screens value rather than closing over the session, so that
 // "which workspace is open" is answered in one place instead of threaded
 // through every handler as an argument.
-func routes(session *workspace.Session, agents func(string, agent.Logger) (agent.Agent, error)) http.Handler {
-	s := screens{session: session, agents: agents, dictionaryRuns: newDictionaryRuns()}
+func routes(session *workspace.Session, agents func(string, agent.Logger) (agent.Agent, error), revealers ...desktop.FolderRevealer) http.Handler {
+	var revealer desktop.FolderRevealer
+	if len(revealers) > 0 {
+		revealer = revealers[0]
+	}
+	s := screens{session: session, agents: agents, dictionaryRuns: newDictionaryRuns(), translationRuns: newTranslationRuns(), revealer: revealer}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", noDirectoryListing(http.FileServerFS(staticFS)))
@@ -91,6 +101,9 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/translate", s.startTranslation)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/validate-repair", s.validateAndRepair)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/retry-failed", s.retryFailedChunks)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/translate/stop", s.stopTranslation)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/compose", s.composeTranslatedBook)
+	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/open-folder", s.openOutputFolder)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary.tsv", s.bookDictionaryTSV)
 	mux.HandleFunc("GET /series/{series}/dictionaries/{target}", s.seriesDictionaryTSV)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary/review", s.dictionaryReview)
@@ -99,15 +112,44 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/promote", s.promoteDictionaryTerm)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary/unpromote", s.unpromoteDictionaryTerm)
 	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary-progress", s.dictionaryProgress)
+	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/dictionary-events", s.dictionaryEvents)
+	mux.HandleFunc("GET /series/{series}/books/{book}/targets/{target}/progress", s.translationProgress)
 	return mux
 }
 
 // screens renders the interface over whichever workspace the session has open.
 type screens struct {
-	session        *workspace.Session
-	agents         func(string, agent.Logger) (agent.Agent, error)
-	dictionaryRuns *dictionaryRuns
+	session         *workspace.Session
+	agents          func(string, agent.Logger) (agent.Agent, error)
+	dictionaryRuns  *dictionaryRuns
+	translationRuns *translationRuns
+	revealer        desktop.FolderRevealer
 }
+
+type translationRuns struct {
+	mu   sync.Mutex
+	runs map[string]context.CancelFunc
+}
+
+func newTranslationRuns() *translationRuns {
+	return &translationRuns{runs: make(map[string]context.CancelFunc)}
+}
+func (r *translationRuns) start(key string) context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	r.runs[key] = cancel
+	return ctx
+}
+func (r *translationRuns) stop(key string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cancel := r.runs[key]; cancel != nil {
+		cancel()
+		delete(r.runs, key)
+	}
+}
+func (r *translationRuns) clear(key string) { r.mu.Lock(); defer r.mu.Unlock(); delete(r.runs, key) }
 
 type dictionaryRuns struct {
 	mu     sync.Mutex
@@ -454,6 +496,51 @@ func (s screens) startTranslation(w http.ResponseWriter, r *http.Request) {
 	s.bookDetail(w, r)
 }
 
+func (s screens) stopTranslation(w http.ResponseWriter, r *http.Request) {
+	s.translationRuns.stop(dictionaryKey(r.PathValue("series"), r.PathValue("book"), r.PathValue("target")))
+	s.bookDetail(w, r)
+}
+
+func (s screens) composeTranslatedBook(w http.ResponseWriter, r *http.Request) {
+	ws, ok := s.session.Current()
+	if !ok {
+		s.reply(w, r, form{})
+		return
+	}
+	path, err := (translation.Translator{Root: ws.Root}).ComposeTranslatedBook(r.PathValue("series"), r.PathValue("book"), r.PathValue("target"))
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	notice := "Composed translated Book."
+	if strings.Contains(filepath.Base(path), ".partial.") {
+		notice = "Composed partial translated Book; original Text Nodes fill incomplete Chunks."
+	}
+	s.detailNotice(w, r, notice)
+}
+
+func (s screens) openOutputFolder(w http.ResponseWriter, r *http.Request) {
+	if s.revealer == nil {
+		s.detail(w, r, "opening folders is unavailable in the headless server")
+		return
+	}
+	ws, ok := s.session.Current()
+	if !ok {
+		s.reply(w, r, form{})
+		return
+	}
+	path, err := (translation.Translator{Root: ws.Root}).OutputDirectory(r.PathValue("series"), r.PathValue("book"), r.PathValue("target"))
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	if err := s.revealer.RevealFolder(path); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	s.detailNotice(w, r, "Opened the translated Book folder.")
+}
+
 func (s screens) validateAndRepair(w http.ResponseWriter, r *http.Request) {
 	s.startRepair(w, r, false)
 }
@@ -499,6 +586,9 @@ func (s screens) startRepair(w http.ResponseWriter, r *http.Request, onlyFailed 
 }
 
 func (s screens) translateBook(ws workspace.Workspace, series library.Series, book library.Book, targetLanguage string) {
+	key := dictionaryKey(series.Code, book.Code, targetLanguage)
+	ctx := s.translationRuns.start(key)
+	defer s.translationRuns.clear(key)
 	transcript, err := agent.NewFileLogger(filepath.Join(ws.Root, "logs", "agent-transcript.jsonl"))
 	if err != nil {
 		log.Printf("translation for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
@@ -515,7 +605,7 @@ func (s screens) translateBook(ws workspace.Workspace, series library.Series, bo
 		Root:             ws.Root,
 		Agent:            client,
 		TranslationModel: ws.Config.Models.Translation,
-	}).Translate(context.Background(), series.Code, book.Code, targetLanguage)
+	}).Translate(ctx, series.Code, book.Code, targetLanguage)
 	if err != nil {
 		log.Printf("translation for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
 		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
@@ -840,6 +930,124 @@ func (s screens) dictionaryProgress(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+func (s screens) dictionaryEvents(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	send := func() bool {
+		store, ok := s.current()
+		if !ok {
+			return false
+		}
+		lib, err := store.Library()
+		if err != nil {
+			return false
+		}
+		series, book, found := lib.Book(r.PathValue("series"), r.PathValue("book"))
+		if !found {
+			return false
+		}
+		for _, target := range book.Targets {
+			if target.Language == r.PathValue("target") {
+				body, err := execute("dictionary-progress", dictionaryProgressData{SeriesCode: series.Code, BookCode: book.Code, Language: target.Language, Progress: s.dictionaryRuns.get(dictionaryKey(series.Code, book.Code, target.Language))})
+				if err != nil {
+					return false
+				}
+				encoded, _ := json.Marshal(body)
+				_, _ = fmt.Fprintf(w, "event: progress\ndata: %s\n\n", encoded)
+				flusher.Flush()
+				return true
+			}
+		}
+		return false
+	}
+	if !send() {
+		http.NotFound(w, r)
+		return
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if !send() {
+				return
+			}
+		}
+	}
+}
+
+// translationProgress is an SSE stream. Each connection reads state.json on
+// every tick, so EventSource reconnects naturally resync after a dropped link.
+func (s screens) translationProgress(w http.ResponseWriter, r *http.Request) {
+	if _, ok := w.(http.Flusher); !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	flusher := w.(http.Flusher)
+	send := func() bool {
+		body, err := s.translationProgressFragment(r)
+		if err != nil {
+			return false
+		}
+		encoded, _ := json.Marshal(body)
+		_, _ = fmt.Fprintf(w, "event: progress\ndata: %s\n\n", encoded)
+		flusher.Flush()
+		return true
+	}
+	if !send() {
+		http.NotFound(w, r)
+		return
+	}
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			if !send() {
+				return
+			}
+		}
+	}
+}
+
+func (s screens) translationProgressFragment(r *http.Request) (string, error) {
+	ws, ok := s.session.Current()
+	if !ok {
+		return "", fmt.Errorf("no Workspace")
+	}
+	store := library.NewStore(ws.Root)
+	lib, err := store.Library()
+	if err != nil {
+		return "", err
+	}
+	series, book, found := lib.Book(r.PathValue("series"), r.PathValue("book"))
+	if !found {
+		return "", fmt.Errorf("Book not found")
+	}
+	for _, target := range book.Targets {
+		if target.Language == r.PathValue("target") {
+			progress, err := (translation.Translator{Root: ws.Root}).TranslationProgress(series.Code, book.Code, target.Language)
+			if err != nil {
+				return "", err
+			}
+			return execute("translation-progress", translationProgressData{SeriesCode: series.Code, BookCode: book.Code, Language: target.Language, Status: target.Status, Progress: progress})
+		}
+	}
+	return "", fmt.Errorf("Translation Target not found")
+}
+
 func (s screens) detail(w http.ResponseWriter, r *http.Request, problem string) {
 	s.renderDetail(w, r, problem, "")
 }
@@ -890,15 +1098,16 @@ func (s screens) renderBookDetail(w http.ResponseWriter, r *http.Request, lib li
 }
 
 type bookDetailData struct {
-	Series       library.Series
-	Book         library.Book
-	Allowed      []targetOption
-	Languages    []workspace.Language
-	Progress     map[string]translation.DictionaryProgress
-	Dictionaries map[string]dictionaryReview
-	Prepared     map[string]bool
-	Notice       string
-	Problem      string
+	Series              library.Series
+	Book                library.Book
+	Allowed             []targetOption
+	Languages           []workspace.Language
+	Progress            map[string]translation.DictionaryProgress
+	TranslationProgress map[string]translation.Progress
+	Dictionaries        map[string]dictionaryReview
+	Prepared            map[string]bool
+	Notice              string
+	Problem             string
 }
 
 type dictionaryReview struct {
@@ -930,6 +1139,14 @@ type dictionaryProgressData struct {
 	Progress   translation.DictionaryProgress
 }
 
+type translationProgressData struct {
+	SeriesCode string
+	BookCode   string
+	Language   string
+	Status     library.Status
+	Progress   translation.Progress
+}
+
 func (s screens) bookDetailData(series library.Series, book library.Book, problem string) bookDetailData {
 	ws, _ := s.session.Current()
 	allowed := make([]targetOption, 0, len(ws.Config.Languages))
@@ -937,6 +1154,7 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 	progress := make(map[string]translation.DictionaryProgress, len(book.Targets))
 	dictionaries := make(map[string]dictionaryReview, len(book.Targets))
 	prepared := make(map[string]bool, len(book.Targets))
+	translationProgress := make(map[string]translation.Progress, len(book.Targets))
 	translator := translation.Translator{Root: ws.Root}
 	for _, target := range book.Targets {
 		if ready, err := translator.PreparedTextChunksPresent(series.Code, book.Code); err == nil {
@@ -952,13 +1170,16 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 		if target.Status == library.StatusAnalyzing {
 			progress[target.Language] = s.dictionaryRuns.get(dictionaryKey(series.Code, book.Code, target.Language))
 		}
+		if value, err := translator.TranslationProgress(series.Code, book.Code, target.Language); err == nil {
+			translationProgress[target.Language] = value
+		}
 	}
 	for _, tag := range ws.Config.Languages {
 		if language, ok := workspace.LanguageFor(tag); ok && tag != series.SourceLanguage {
 			allowed = append(allowed, targetOption{Language: language, Status: existing[tag]})
 		}
 	}
-	return bookDetailData{Series: series, Book: book, Allowed: allowed, Languages: workspace.Catalog(), Progress: progress, Dictionaries: dictionaries, Prepared: prepared, Problem: problem}
+	return bookDetailData{Series: series, Book: book, Allowed: allowed, Languages: workspace.Catalog(), Progress: progress, TranslationProgress: translationProgress, Dictionaries: dictionaries, Prepared: prepared, Problem: problem}
 }
 
 func (s screens) reviewDictionary(store library.Store, series library.Series, book library.Book, targetLanguage string) dictionaryReview {

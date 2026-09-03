@@ -39,6 +39,21 @@
     document.addEventListener('change', function (event) { if (event.target.name === 'series') syncBookSource(); });
     document.addEventListener('DOMContentLoaded', syncBookSource);
     document.body.addEventListener('htmx:afterSwap', syncBookSource);
+    function connectProgress(root) {
+      root.querySelectorAll('[data-translation-progress-url], [data-progress-events-url]').forEach(function (region) {
+        if (region.progressSource) return;
+        var source = new EventSource(region.dataset.translationProgressUrl || region.dataset.progressEventsUrl);
+        region.progressSource = source;
+        source.addEventListener('progress', function (event) {
+          var replacement = document.createElement('div');
+          replacement.innerHTML = JSON.parse(event.data);
+          var next = replacement.firstElementChild;
+          if (next) region.innerHTML = next.innerHTML;
+        });
+      });
+    }
+    document.addEventListener('DOMContentLoaded', function () { connectProgress(document); });
+    document.body.addEventListener('htmx:afterSwap', function (event) { connectProgress(event.target); });
   </script>
 </body>
 </html>{{end}}

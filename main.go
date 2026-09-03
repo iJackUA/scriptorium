@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os/exec"
 	"sync"
 
 	"github.com/ijackua/scriptorium/internal/desktop"
@@ -38,7 +39,7 @@ func main() {
 	picker := &windowPicker{}
 	session := workspace.NewSession(picker, workspace.NewSettings(settingsPath))
 
-	server, err := ui.NewServer(session)
+	server, err := ui.NewServerWithFolderRevealer(session, picker)
 	if err != nil {
 		log.Fatalf("scriptorium: %v", err)
 	}
@@ -105,6 +106,13 @@ func (p *windowPicker) PickFolder() (string, error) {
 		return "", desktop.ErrCancelled
 	}
 	return folder, nil
+}
+
+func (p *windowPicker) RevealFolder(folder string) error {
+	if err := exec.Command("open", folder).Start(); err != nil {
+		return fmt.Errorf("open translated Book folder: %w", err)
+	}
+	return nil
 }
 
 // windowProxy forwards what the window asks for to the embedded server.

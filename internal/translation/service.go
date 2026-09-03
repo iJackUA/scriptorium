@@ -37,6 +37,17 @@ type Translator struct {
 	Agent            agent.Agent
 	TranslationModel agent.Model
 	ChunkWordBudget  int
+	// Report receives durable progress snapshots after state.json has been
+	// updated. It is optional so command-line and test callers stay simple.
+	Report func(Progress)
+}
+
+// Progress is the persisted, user-visible progress of one Translation Target.
+type Progress struct {
+	Completed int
+	Total     int
+	Failed    int
+	Cost      float64
 }
 
 type materializationManifest struct {
@@ -231,6 +242,7 @@ func (t Translator) resumeTranslation(ctx context.Context, seriesCode, bookCode,
 	if err := writeJSONAtomic(statePath, state); err != nil {
 		return "", err
 	}
+	t.report(state)
 
 	sourceLanguage, _ := workspace.LanguageFor(series.SourceLanguage)
 	targetLanguageInfo, _ := workspace.LanguageFor(targetLanguage)
@@ -264,6 +276,7 @@ func (t Translator) resumeTranslation(ctx context.Context, seriesCode, bookCode,
 			state.Chunks[index].Status = chunkFailed
 			state.FailedChunks = failedChunkCount(state.Chunks)
 			_ = writeJSONAtomic(statePath, state)
+			t.report(state)
 			return "", fmt.Errorf("translate Chunk %d: %w", chunk.Index, err)
 		}
 		if !complete {
@@ -273,6 +286,7 @@ func (t Translator) resumeTranslation(ctx context.Context, seriesCode, bookCode,
 			if err := writeJSONAtomic(statePath, state); err != nil {
 				return "", err
 			}
+			t.report(state)
 			continue
 		}
 		translatedPath := filepath.Join(targetDirectory, chunksDirectory, translatedChunksDirectory, chunkFileName(chunk.Index))
@@ -284,6 +298,7 @@ func (t Translator) resumeTranslation(ctx context.Context, seriesCode, bookCode,
 		if err := writeJSONAtomic(statePath, state); err != nil {
 			return "", err
 		}
+		t.report(state)
 		continuity = continuityWindow{
 			source:       append([]format.TextNode(nil), chunk.Nodes...),
 			translations: append([]format.TextNode(nil), translated...),
@@ -294,12 +309,14 @@ func (t Translator) resumeTranslation(ctx context.Context, seriesCode, bookCode,
 		if err := writeJSONAtomic(statePath, state); err != nil {
 			return "", err
 		}
+		t.report(state)
 		return "", fmt.Errorf("translation has %d failed Chunks; automatic Book Composition is blocked", state.FailedChunks)
 	}
 	for _, chunk := range state.Chunks {
 		if chunk.Status != chunkCompleted {
 			state.Status = targetStateFailed
 			_ = writeJSONAtomic(statePath, state)
+			t.report(state)
 			return "", errors.New("translation remains incomplete; use Validate and Repair to continue")
 		}
 	}
@@ -317,7 +334,46 @@ func (t Translator) resumeTranslation(ctx context.Context, seriesCode, bookCode,
 	if err := writeJSONAtomic(statePath, state); err != nil {
 		return "", err
 	}
+	t.report(state)
 	return outputPath, nil
+}
+
+func (t Translator) report(state translationState) {
+	if t.Report == nil {
+		return
+	}
+	progress := Progress{Total: len(state.Chunks), Failed: failedChunkCount(state.Chunks)}
+	for _, chunk := range state.Chunks {
+		if chunk.Status == chunkCompleted {
+			progress.Completed++
+		}
+		progress.Cost += chunk.Cost
+	}
+	t.Report(progress)
+}
+
+// TranslationProgress reads the durable dashboard values without contacting
+// the Agent. A target that has not started yet reports zero progress.
+func (t Translator) TranslationProgress(seriesCode, bookCode, targetLanguage string) (Progress, error) {
+	directory, err := t.translationTargetDirectory(seriesCode, bookCode, targetLanguage)
+	if err != nil {
+		return Progress{}, err
+	}
+	state, err := loadTranslationState(filepath.Join(directory, library.StateFile))
+	if errors.Is(err, os.ErrNotExist) {
+		return Progress{}, nil
+	}
+	if err != nil {
+		return Progress{}, fmt.Errorf("read Translation Target state: %w", err)
+	}
+	progress := Progress{Total: len(state.Chunks), Failed: failedChunkCount(state.Chunks)}
+	for _, chunk := range state.Chunks {
+		if chunk.Status == chunkCompleted {
+			progress.Completed++
+		}
+		progress.Cost += chunk.Cost
+	}
+	return progress, nil
 }
 
 func loadOrCreateTranslationState(path, sourceName string, source []byte, dictionary []library.Term, chunks []manifestChunk) (translationState, bool, error) {
@@ -579,6 +635,16 @@ func (t Translator) translationTargetDirectory(seriesCode, bookCode, targetLangu
 		}
 	}
 	return "", fmt.Errorf("Translation Target %q does not exist", targetLanguage)
+}
+
+// OutputDirectory is the folder containing complete and diagnostic Book
+// compositions for a Translation Target.
+func (t Translator) OutputDirectory(seriesCode, bookCode, targetLanguage string) (string, error) {
+	directory, err := t.translationTargetDirectory(seriesCode, bookCode, targetLanguage)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(directory, outputDirectory), nil
 }
 
 func translationTarget(store library.Store, seriesCode, bookCode, targetLanguage string) (library.Series, library.Book, library.TranslationTarget, error) {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ijackua/scriptorium/internal/agent"
+	"github.com/ijackua/scriptorium/internal/desktop"
 	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
@@ -30,12 +31,18 @@ type Server struct {
 // The library is not passed in: it is read out of whichever workspace the
 // session has open, which is not known until the user has chosen one.
 func NewServer(session *workspace.Session) (*Server, error) {
-	return newServer(session, agent.NewWithLogger)
+	return newServer(session, agent.NewWithLogger, nil)
+}
+
+// NewServerWithFolderRevealer adds the one host-specific action needed by the
+// delivery dashboard. The headless server deliberately leaves it nil.
+func NewServerWithFolderRevealer(session *workspace.Session, revealer desktop.FolderRevealer) (*Server, error) {
+	return newServer(session, agent.NewWithLogger, revealer)
 }
 
 // newServer lets handler tests supply an Agent that can be held or cancelled
 // without starting an external CLI process.
-func newServer(session *workspace.Session, agents func(string, agent.Logger) (agent.Agent, error)) (*Server, error) {
+func newServer(session *workspace.Session, agents func(string, agent.Logger) (agent.Agent, error), revealers ...desktop.FolderRevealer) (*Server, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("bind loopback listener: %w", err)
@@ -51,9 +58,13 @@ func newServer(session *workspace.Session, agents func(string, agent.Logger) (ag
 		origins["http://"+host] = struct{}{}
 	}
 
+	var revealer desktop.FolderRevealer
+	if len(revealers) > 0 {
+		revealer = revealers[0]
+	}
 	s := &Server{
 		listener: listener,
-		handler:  requireLocalCaller(local, origins, routes(session, agents)),
+		handler:  requireLocalCaller(local, origins, routes(session, agents, revealer)),
 	}
 	s.http = &http.Server{
 		Handler: s.handler,
