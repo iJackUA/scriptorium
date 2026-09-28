@@ -1,0 +1,38 @@
+{{/*
+  The Agent, Model and Effort pickers for each kind of work. Every change
+  posts the whole panel and swaps it back, saved: there is no Save button.
+  On a Book, the first option of each picker inherits the workspace default.
+*/}}
+{{define "choices-panel"}}
+<form id="{{.ID}}" class="flex flex-col gap-3" hx-post="{{.Action}}" hx-trigger="change" hx-target="this" hx-swap="outerHTML">
+  {{template "form-problem" .Problem}}
+  {{range .Tasks}}{{$task := .}}
+  <fieldset class="fieldset min-w-0" data-testid="choices-{{.Task}}">
+    <legend class="fieldset-legend text-control">{{.Label}}</legend>
+    <div class="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)]">
+      <label class="flex min-w-0 flex-col gap-1"><span class="text-micro text-base-content/60">Agent</span>
+        <select class="select select-sm w-full" name="{{.Task}}_agent" aria-label="{{.Label}} Agent">
+          {{if $.Book}}<option value="" {{if eq .Selected.Agent ""}}selected{{end}}>Inherit ({{.Inherited.Agent}})</option>{{end}}
+          {{range .Agents}}<option value="{{.}}" {{if eq $task.Selected.Agent .}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+      <label class="flex min-w-0 flex-col gap-1"><span class="text-micro text-base-content/60">Model</span>
+        <select class="select select-sm w-full" name="{{.Task}}_model" aria-label="{{.Label}} Model">
+          {{if $.Book}}<option value="" {{if eq .Selected.Model ""}}selected{{end}}>Inherit ({{.Inherited.Model}})</option>{{end}}
+          {{range .Models}}<option value="{{.Name}}" {{if eq $task.Selected.Model .Name}}selected{{end}}>{{.Label}}</option>{{end}}
+        </select>
+      </label>
+      <label class="flex min-w-0 flex-col gap-1"><span class="text-micro text-base-content/60">Effort</span>
+        <select class="select select-sm w-full" name="{{.Task}}_effort" aria-label="{{.Label}} Effort">
+          {{if $.Book}}<option value="" {{if eq .Selected.Effort ""}}selected{{end}}>Inherit ({{.Inherited.Effort}})</option>{{end}}
+          {{range .Efforts}}<option value="{{.}}" {{if eq $task.Selected.Effort .}}selected{{end}}>{{.}}</option>{{end}}
+        </select>
+      </label>
+    </div>
+    <p class="text-micro text-base-content/60">{{.Hint}}</p>
+    {{with .Unlisted}}<p class="text-micro text-warning" data-testid="models-unlisted">{{.}}</p>{{end}}
+  </fieldset>
+  {{end}}
+  <p class="text-micro {{if .Saved}}text-success{{else}}text-base-content/60{{end}}" role="status" aria-live="polite">{{if .Saved}}Saved.{{else}}Changes are saved as you make them.{{end}}</p>
+</form>
+{{end}}
