@@ -340,11 +340,23 @@ func (s screens) fillMetadata(store library.Store, seriesCode, bookCode, filenam
 		if !ok {
 			return
 		}
-		client, err := s.agents(ws.Config.Agent, nil)
+		lib, err := store.Library()
 		if err != nil {
 			return
 		}
-		inferred, err := metadata.InferText(context.Background(), client, ws.Config.Models.Mechanical, source)
+		_, book, found := lib.Book(seriesCode, bookCode)
+		if !found {
+			return
+		}
+		settings, err := book.AgentSettings(ws.Config, seriesCode)
+		if err != nil {
+			return
+		}
+		client, err := s.agents(settings.Agent, nil)
+		if err != nil {
+			return
+		}
+		inferred, err := metadata.InferText(context.Background(), client, settings.Models.Mechanical, source)
 		if err != nil {
 			return
 		}
@@ -492,7 +504,12 @@ func (s screens) startTranslation(w http.ResponseWriter, r *http.Request) {
 		s.detail(w, r, "prepare Text Chunks before starting translation")
 		return
 	}
-	go s.translateBook(ws, series, book, targetLanguage)
+	settings, err := readyToTranslate(ws, series, book)
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	go s.translateBook(ws, series, book, targetLanguage, settings)
 	s.bookDetail(w, r)
 }
 
@@ -578,14 +595,33 @@ func (s screens) startRepair(w http.ResponseWriter, r *http.Request, onlyFailed 
 			s.detail(w, r, "Dictionary Building must finish before repairing translation Chunks")
 			return
 		}
-		go s.repairBook(ws, series, book, targetLanguage, onlyFailed)
+		settings, err := readyToTranslate(ws, series, book)
+		if err != nil {
+			s.detail(w, r, err.Error())
+			return
+		}
+		go s.repairBook(ws, series, book, targetLanguage, settings, onlyFailed)
 		s.bookDetail(w, r)
 		return
 	}
 	http.NotFound(w, r)
 }
 
-func (s screens) translateBook(ws workspace.Workspace, series library.Series, book library.Book, targetLanguage string) {
+// readyToTranslate resolves the Book's Agent and Models and checks the Series
+// prompt override, both of which must load before translation starts rather
+// than fail mid-Book. The Translator loads the prompt again itself.
+func readyToTranslate(ws workspace.Workspace, series library.Series, book library.Book) (workspace.AgentSettings, error) {
+	settings, err := book.AgentSettings(ws.Config, series.Code)
+	if err != nil {
+		return workspace.AgentSettings{}, err
+	}
+	if _, err := translation.LoadPromptTemplate(ws.Root, series.Code); err != nil {
+		return workspace.AgentSettings{}, err
+	}
+	return settings, nil
+}
+
+func (s screens) translateBook(ws workspace.Workspace, series library.Series, book library.Book, targetLanguage string, settings workspace.AgentSettings) {
 	key := dictionaryKey(series.Code, book.Code, targetLanguage)
 	ctx := s.translationRuns.start(key)
 	defer s.translationRuns.clear(key)
@@ -595,7 +631,7 @@ func (s screens) translateBook(ws workspace.Workspace, series library.Series, bo
 		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
 		return
 	}
-	client, err := s.agents(ws.Config.Agent, transcript)
+	client, err := s.agents(settings.Agent, transcript)
 	if err != nil {
 		log.Printf("translation for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
 		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
@@ -604,7 +640,7 @@ func (s screens) translateBook(ws workspace.Workspace, series library.Series, bo
 	_, err = (translation.Translator{
 		Root:             ws.Root,
 		Agent:            client,
-		TranslationModel: ws.Config.Models.Translation,
+		TranslationModel: settings.Models.Translation,
 	}).Translate(ctx, series.Code, book.Code, targetLanguage)
 	if err != nil {
 		log.Printf("translation for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
@@ -612,20 +648,20 @@ func (s screens) translateBook(ws workspace.Workspace, series library.Series, bo
 	}
 }
 
-func (s screens) repairBook(ws workspace.Workspace, series library.Series, book library.Book, targetLanguage string, onlyFailed bool) {
+func (s screens) repairBook(ws workspace.Workspace, series library.Series, book library.Book, targetLanguage string, settings workspace.AgentSettings, onlyFailed bool) {
 	transcript, err := agent.NewFileLogger(filepath.Join(ws.Root, "logs", "agent-transcript.jsonl"))
 	if err != nil {
 		log.Printf("translation repair for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
 		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
 		return
 	}
-	client, err := s.agents(ws.Config.Agent, transcript)
+	client, err := s.agents(settings.Agent, transcript)
 	if err != nil {
 		log.Printf("translation repair for %s/%s/%s: %v", series.Code, book.Code, targetLanguage, err)
 		s.recordTranslationFailure(ws.Root, series, book, targetLanguage, err)
 		return
 	}
-	translator := translation.Translator{Root: ws.Root, Agent: client, TranslationModel: ws.Config.Models.Translation}
+	translator := translation.Translator{Root: ws.Root, Agent: client, TranslationModel: settings.Models.Translation}
 	if onlyFailed {
 		_, err = translator.RetryFailedChunks(context.Background(), series.Code, book.Code, targetLanguage)
 	} else {
@@ -670,6 +706,16 @@ func (s screens) startDictionaryBuilding(w http.ResponseWriter, r *http.Request)
 		s.detail(w, r, "Dictionary Building can only start for a new Translation Target")
 		return
 	}
+	ws, ok := s.session.Current()
+	if !ok {
+		s.reply(w, r, form{})
+		return
+	}
+	settings, err := book.AgentSettings(ws.Config, seriesCode)
+	if err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
 	source, filename, err := store.SourceFile(seriesCode, bookCode)
 	if err != nil {
 		s.detail(w, r, err.Error())
@@ -686,8 +732,7 @@ func (s screens) startDictionaryBuilding(w http.ResponseWriter, r *http.Request)
 	}
 	key := dictionaryKey(seriesCode, bookCode, targetLanguage)
 	ctx, runID := s.dictionaryRuns.start(key, translation.DictionaryProgress{Active: 1, Total: len(translation.ChunkNodes(document.TextNodes(), 0))})
-	ws, _ := s.session.Current()
-	go s.buildDictionary(ctx, store, ws.Root, ws.Config, series, book, targetLanguage, key, runID)
+	go s.buildDictionary(ctx, store, ws.Root, ws.Config, settings, series, book, targetLanguage, key, runID)
 	s.bookDetail(w, r)
 }
 
@@ -830,7 +875,7 @@ func (s screens) loadDictionaryReview(w http.ResponseWriter, r *http.Request) (d
 	return review, true
 }
 
-func (s screens) buildDictionary(ctx context.Context, store library.Store, workspaceRoot string, config workspace.Config, series library.Series, book library.Book, targetLanguage, key string, runID uint64) {
+func (s screens) buildDictionary(ctx context.Context, store library.Store, workspaceRoot string, config workspace.Config, settings workspace.AgentSettings, series library.Series, book library.Book, targetLanguage, key string, runID uint64) {
 	defer s.dictionaryRuns.clear(key, runID)
 	fail := func(err error) {
 		if ctx.Err() != nil {
@@ -858,12 +903,12 @@ func (s screens) buildDictionary(ctx context.Context, store library.Store, works
 		fail(err)
 		return
 	}
-	client, err := s.agents(config.Agent, transcript)
+	client, err := s.agents(settings.Agent, transcript)
 	if err != nil {
 		fail(err)
 		return
 	}
-	terms, err := (translation.DictionaryBuilder{Agent: client, MechanicalModel: config.Models.Mechanical, OccurrenceThreshold: config.DictionaryOccurrenceThreshold}).Build(ctx, document.TextNodes(), series.SourceLanguage, targetLanguage, func(progress translation.DictionaryProgress) {
+	terms, err := (translation.DictionaryBuilder{Agent: client, MechanicalModel: settings.Models.Mechanical, OccurrenceThreshold: config.DictionaryOccurrenceThreshold}).Build(ctx, document.TextNodes(), series.SourceLanguage, targetLanguage, func(progress translation.DictionaryProgress) {
 		s.dictionaryRuns.set(key, runID, progress)
 	})
 	if err != nil {

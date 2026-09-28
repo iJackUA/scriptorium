@@ -193,6 +193,10 @@ func (t Translator) resumeTranslation(ctx context.Context, seriesCode, bookCode,
 	if err != nil {
 		return "", err
 	}
+	template, err := LoadPromptTemplate(t.Root, seriesCode)
+	if err != nil {
+		return "", err
+	}
 	source, sourceName, err := store.SourceFile(seriesCode, bookCode)
 	if err != nil {
 		return "", err
@@ -269,7 +273,7 @@ func (t Translator) resumeTranslation(ctx context.Context, seriesCode, bookCode,
 		if strings.TrimSpace(t.TranslationModel) == "" {
 			return "", errors.New("translation needs a translation Model")
 		}
-		translated, complete, attempts, cost, err := t.translateChunk(ctx, targetDirectory, sourceLanguage, targetLanguageInfo, dictionary, continuity, chunk)
+		translated, complete, attempts, cost, err := t.translateChunk(ctx, targetDirectory, template, sourceLanguage, targetLanguageInfo, dictionary, continuity, chunk)
 		state.Chunks[index].Attempts += attempts
 		state.Chunks[index].Cost += cost
 		if err != nil {
@@ -495,8 +499,8 @@ func readTranslatedChunk(targetDirectory string, chunk Chunk) ([]format.TextNode
 	return translated, nil
 }
 
-func (t Translator) translateChunk(ctx context.Context, targetDirectory string, sourceLanguage, targetLanguage workspace.Language, dictionary []library.Term, continuity continuityWindow, chunk Chunk) ([]format.TextNode, bool, int, float64, error) {
-	basePrompt := translationPrompt(languageLabel(sourceLanguage), languageLabel(targetLanguage), dictionary, continuity, chunk.Nodes)
+func (t Translator) translateChunk(ctx context.Context, targetDirectory, template string, sourceLanguage, targetLanguage workspace.Language, dictionary []library.Term, continuity continuityWindow, chunk Chunk) ([]format.TextNode, bool, int, float64, error) {
+	basePrompt := translationPrompt(template, languageLabel(sourceLanguage), languageLabel(targetLanguage), dictionary, continuity, chunk.Nodes)
 	attempts := 0
 	var cost float64
 
@@ -536,7 +540,7 @@ func (t Translator) translateChunk(ctx context.Context, targetDirectory string, 
 	var perNode []format.TextNode
 	allNodesValid := true
 	for _, node := range chunk.Nodes {
-		translated, valid, err = call(translationPrompt(languageLabel(sourceLanguage), languageLabel(targetLanguage), dictionary, continuity, []format.TextNode{node}), []format.TextNode{node})
+		translated, valid, err = call(translationPrompt(template, languageLabel(sourceLanguage), languageLabel(targetLanguage), dictionary, continuity, []format.TextNode{node}), []format.TextNode{node})
 		if err != nil {
 			return nil, false, attempts, cost, err
 		}

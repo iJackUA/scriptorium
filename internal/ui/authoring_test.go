@@ -412,7 +412,8 @@ func TestUploadingTextInfersMetadataWithTheMechanicalModel(t *testing.T) {
 		t.Fatalf("Agent requests = %d, want one", len(requests))
 	}
 	ws, _ := sessionFor(t, root).Current()
-	if requests[0].Model != ws.Config.Models.Mechanical || requests[0].Effort != agent.EffortLow {
+	settings, _ := ws.Config.Settings(workspace.AgentSettings{})
+	if requests[0].Model != settings.Models.Mechanical || requests[0].Effort != agent.EffortLow {
 		t.Errorf("metadata request = %+v, want mechanical Model at low effort", requests[0])
 	}
 }

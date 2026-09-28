@@ -22,8 +22,8 @@ func TestOpenCreatesAConfigWithDefaults(t *testing.T) {
 	if ws.Config.Agent == "" {
 		t.Error("no default Agent")
 	}
-	if ws.Config.Models.Mechanical == "" || ws.Config.Models.Translation == "" {
-		t.Errorf("both Models want a default, got %+v", ws.Config.Models)
+	if settings, err := ws.Config.Settings(AgentSettings{}); err != nil || settings.Models.Mechanical == "" || settings.Models.Translation == "" {
+		t.Errorf("both Models want a default, got %+v (%v)", settings.Models, err)
 	}
 	if ws.Config.DictionaryOccurrenceThreshold != 2 {
 		t.Errorf("DictionaryOccurrenceThreshold = %d, want 2", ws.Config.DictionaryOccurrenceThreshold)
@@ -73,8 +73,9 @@ func TestOpeningAnExistingWorkspacePreservesItByteForByte(t *testing.T) {
 	if got := ws.Config.Languages; len(got) != 1 || got[0] != "de" {
 		t.Errorf("Languages = %v, want [de]", got)
 	}
-	if ws.Config.Models.Translation != "good" {
-		t.Errorf("Models.Translation = %q, want %q", ws.Config.Models.Translation, "good")
+	if settings, _ := ws.Config.Settings(AgentSettings{}); settings.Models.Translation != "good" {
+		got := settings.Models.Translation
+		t.Errorf("translation Model = %q, want %q", got, "good")
 	}
 }
 
@@ -110,7 +111,7 @@ func TestTargetLanguagesCanBeUpdatedWithoutLosingOtherConfiguration(t *testing.T
 		t.Errorf("Languages = %v, want [uk de]", got)
 	}
 	written := read(t, filepath.Join(root, ConfigFile))
-	for _, want := range []string{"languages = [\"uk\", \"de\"]", "agent = \"claude\"", "[models]"} {
+	for _, want := range []string{"languages = [\"uk\", \"de\"]", "agent = \"claude\"", "[agents.claude]"} {
 		if !strings.Contains(written, want) {
 			t.Errorf("workspace.toml does not preserve %q:\n%s", want, written)
 		}

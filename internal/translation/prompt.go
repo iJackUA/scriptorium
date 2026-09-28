@@ -1,7 +1,10 @@
 package translation
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ijackua/scriptorium/internal/format"
@@ -26,8 +29,20 @@ const (
 	textNodesSlot                = "{{TEXT_NODES}}"
 )
 
+// requiredSlots are the slots every prompt template must carry. An override
+// without one would translate a whole book without, say, its Dictionary, and
+// nobody would find out until reading it.
+var requiredSlots = []string{
+	sourceLanguageSlot,
+	targetLanguageSlot,
+	dictionarySlot,
+	continuityWindowSlot,
+	numberedNodeInstructionsSlot,
+	textNodesSlot,
+}
+
 // DefaultPromptTemplate is the translation prompt shipped with Scriptorium.
-// Per-Series replacement of this template is intentionally a later feature.
+// A Series may replace it with its own prompt.md; see LoadPromptTemplate.
 const DefaultPromptTemplate = `Translate the supplied Text Nodes from {{SOURCE_LANGUAGE}} to {{TARGET_LANGUAGE}}.
 
 DICTIONARY — apply every approved Term exactly:
@@ -54,7 +69,40 @@ type continuityWindow struct {
 	translations []format.TextNode
 }
 
-func translationPrompt(sourceLanguage, targetLanguage string, dictionary []library.Term, continuity continuityWindow, nodes []format.TextNode) string {
+// LoadPromptTemplate returns the translation prompt template for a Series:
+// its prompt.md when there is one, which replaces the built-in template
+// outright, and DefaultPromptTemplate otherwise.
+//
+// An override is validated here, on load, so that one missing a required slot
+// fails before any request is made rather than after a book is translated
+// without it.
+func LoadPromptTemplate(root, seriesCode string) (string, error) {
+	rel := filepath.Join(seriesCode, library.PromptFile)
+	body, err := os.ReadFile(filepath.Join(root, rel))
+	if errors.Is(err, os.ErrNotExist) {
+		return DefaultPromptTemplate, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", rel, err)
+	}
+	template := string(body)
+	var missing []string
+	for _, slot := range requiredSlots {
+		if !strings.Contains(template, slot) {
+			missing = append(missing, slot)
+		}
+	}
+	switch len(missing) {
+	case 0:
+		return template, nil
+	case 1:
+		return "", fmt.Errorf("%s is missing the required prompt slot %s", rel, missing[0])
+	default:
+		return "", fmt.Errorf("%s is missing the required prompt slots %s", rel, strings.Join(missing, ", "))
+	}
+}
+
+func translationPrompt(template, sourceLanguage, targetLanguage string, dictionary []library.Term, continuity continuityWindow, nodes []format.TextNode) string {
 	return strings.NewReplacer(
 		sourceLanguageSlot, sourceLanguage,
 		targetLanguageSlot, targetLanguage,
@@ -62,7 +110,7 @@ func translationPrompt(sourceLanguage, targetLanguage string, dictionary []libra
 		continuityWindowSlot, formatContinuityWindow(continuity),
 		numberedNodeInstructionsSlot, numberedNodeInstructions,
 		textNodesSlot, SerializeNodes(nodes),
-	).Replace(DefaultPromptTemplate)
+	).Replace(template)
 }
 
 func formatDictionary(terms []library.Term) string {

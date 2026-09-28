@@ -26,14 +26,6 @@ const ConfigFile = "workspace.toml"
 // folder again.
 var ErrRootMissing = errors.New("workspace folder is missing")
 
-// Models are the Models used per kind of task, named in the Agent's own
-// vocabulary. Mechanical work is cheap and high-volume; translation is where
-// quality is the entire point.
-type Models struct {
-	Mechanical  string `toml:"mechanical"`
-	Translation string `toml:"translation"`
-}
-
 // SetTargetLanguages replaces the ordered Target Language allowlist and
 // returns the immediately-applicable Workspace configuration. It changes only
 // the languages assignment, preserving the rest of the hand-written file.
@@ -107,7 +99,17 @@ type Config struct {
 	Agent                         string   `toml:"agent"`
 	Languages                     []string `toml:"languages"`
 	DictionaryOccurrenceThreshold int      `toml:"dictionary_occurrence_threshold"`
-	Models                        Models   `toml:"models"`
+	// Agents holds the Models of each known Agent, keyed by Agent name,
+	// because a Model name means something only to the Agent that accepts it.
+	// Resolve a Book's Agent and Models through Settings.
+	Agents map[string]Models `toml:"agents"`
+}
+
+// configFile is the on-disk shape of workspace.toml: Config plus the top-level
+// [models] table written before Models were held per Agent.
+type configFile struct {
+	Config
+	Models Models `toml:"models"`
 }
 
 // Workspace is an opened workspace root together with its Config.
@@ -152,11 +154,15 @@ func Open(root string) (Workspace, error) {
 
 	// The freshly written file is decoded rather than trusted, so a created
 	// workspace and an opened one cannot disagree about the defaults.
-	var config Config
-	if _, err := toml.DecodeFile(path, &config); err != nil {
+	var file configFile
+	if _, err := toml.DecodeFile(path, &file); err != nil {
 		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
 	}
+	config := file.Config
 	if err := agent.ValidateName(config.Agent); err != nil {
+		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
+	}
+	if err := resolveAgents(&config, file.Models); err != nil {
 		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
 	}
 	if err := validateTargetLanguages(config.Languages); err != nil {
@@ -192,9 +198,10 @@ languages = []
 # less frequent recurring Terms.
 dictionary_occurrence_threshold = 2
 
-# Models are named in the Agent's own vocabulary — these are what the claude
-# CLI accepts for --model. A Book may override them.
-[models]
+# Models are named in each Agent's own vocabulary, so each Agent keeps its own
+# pair — these are what the claude CLI accepts for --model. A Book may override
+# the Agent, the Models, or both in its book.toml.
+[agents.claude]
 # Mechanical work: inferring metadata, proposing Dictionary Terms. High volume,
 # low stakes, so this wants to be the cheap one.
 mechanical = "claude-haiku-4-5"

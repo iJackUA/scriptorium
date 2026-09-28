@@ -5,12 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/ijackua/scriptorium/internal/agent"
 	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
@@ -20,6 +22,9 @@ import (
 const (
 	// SeriesFile holds a Series' name, source language and defaults.
 	SeriesFile = "series.toml"
+	// PromptFile optionally replaces the built-in translation prompt for every
+	// Book in its Series.
+	PromptFile = "prompt.md"
 	// BooksDir holds one folder per Book, named by its Book Code.
 	BooksDir = "books"
 	// BookFile holds a Book's metadata.
@@ -125,6 +130,9 @@ type bookFile struct {
 	TitleEdited              bool   `toml:"title_edited"`
 	AuthorEdited             bool   `toml:"author_edited"`
 	SourceFileLanguageEdited bool   `toml:"source_file_language_edited"`
+
+	Agent  string           `toml:"agent"`
+	Models workspace.Models `toml:"models"`
 }
 
 // BookMetadata is the editable detail set shown on a Book's details page.
@@ -182,6 +190,11 @@ func (s Store) books(seriesCode, sourceLanguage string) ([]Book, error) {
 			}
 			return nil, fmt.Errorf("read %s: %w", rel, err)
 		}
+		if file.Agent != "" {
+			if err := agent.ValidateName(file.Agent); err != nil {
+				return nil, fmt.Errorf("read %s: %w", rel, err)
+			}
+		}
 		targets, err := s.translationTargets(seriesCode, entry.Name(), sourceLanguage)
 		if err != nil {
 			return nil, err
@@ -190,7 +203,7 @@ func (s Store) books(seriesCode, sourceLanguage string) ([]Book, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read Book %s: %w", entry.Name(), err)
 		}
-		books = append(books, Book{Code: entry.Name(), Title: file.Title, Author: file.Author, SourceFileLanguage: file.SourceFileLanguage, SourceFile: source, Targets: targets})
+		books = append(books, Book{Code: entry.Name(), Title: file.Title, Author: file.Author, SourceFileLanguage: file.SourceFileLanguage, SourceFile: source, Targets: targets, AgentOverride: workspace.AgentSettings{Agent: file.Agent, Models: file.Models}})
 	}
 	slices.SortFunc(books, func(a, b Book) int { return strings.Compare(a.Code, b.Code) })
 	return books, nil
@@ -763,17 +776,33 @@ func writeBookFile(path string, file bookFile) error {
 		"source_file_language_edited": fmt.Sprintf("%t", file.SourceFileLanguageEdited),
 	}
 	lines := strings.Split(string(body), "\n")
-	for key, value := range replacements {
-		for i, line := range lines {
+	// Metadata keys are top-level, so only the lines before the first table
+	// header are theirs, and a missing key goes back in just above it — never
+	// into the [models] table a Book may override its Models in.
+	topLevel := len(lines)
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "[") {
+			topLevel = i
+			break
+		}
+	}
+	var missing []string
+	for _, key := range slices.Sorted(maps.Keys(replacements)) {
+		value := replacements[key]
+		found := false
+		for i, line := range lines[:topLevel] {
 			if strings.HasPrefix(strings.TrimSpace(line), key+" =") {
 				indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
 				lines[i] = indent + key + " = " + value
-				goto replaced
+				found = true
+				break
 			}
 		}
-		lines = append(lines, key+" = "+value)
-	replaced:
+		if !found {
+			missing = append(missing, key+" = "+value)
+		}
 	}
+	lines = slices.Insert(lines, topLevel, missing...)
 	return writeAtomic(path, []byte(strings.Join(lines, "\n")))
 }
 
@@ -993,8 +1022,10 @@ title_edited = %t
 author_edited = %t
 source_file_language_edited = %t
 
-# The Agent and Models are inherited from this Series and from workspace.toml.
-# Uncomment to spend more on this Book than on the rest, or less.
+# The Agent and Models are inherited from workspace.toml. Uncomment to spend
+# more on this Book than on the rest, or less. Model names belong to the Agent
+# that accepts them: a Book naming another Agent inherits that Agent's Models
+# from workspace.toml, never the default Agent's.
 #
 # agent = "claude"
 #
