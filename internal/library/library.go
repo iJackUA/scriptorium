@@ -5,12 +5,7 @@
 // target language. Status and progress belong to the Translation Target.
 package library
 
-import (
-	"fmt"
-	"path/filepath"
-
-	"github.com/ijackua/scriptorium/internal/workspace"
-)
+import "github.com/ijackua/scriptorium/internal/workspace"
 
 // Status is the stage a Translation Target has reached.
 type Status string
@@ -49,9 +44,9 @@ type Book struct {
 	SourceFileLanguage string
 	SourceFile         string
 	Targets            []TranslationTarget
-	// AgentOverride is the Agent and Models set in book.toml, empty where the
-	// Book inherits. Resolve it with workspace.Config.Settings.
-	AgentOverride workspace.AgentSettings
+	// Override is the Agent, Model and Effort set per Task in book.toml,
+	// empty where the Book inherits. Resolve it with Choices.
+	Override workspace.Choices
 }
 
 // Label is what to call the Book on screen.
@@ -65,18 +60,6 @@ func (b Book) Label() string {
 		return b.Title
 	}
 	return b.Code
-}
-
-// AgentSettings resolves the Agent and Models this Book's work uses against the
-// workspace defaults. An override that does not pair up is reported against
-// the Book's own book.toml, so the user knows which file to fix before any
-// request is made.
-func (b Book) AgentSettings(config workspace.Config, seriesCode string) (workspace.AgentSettings, error) {
-	settings, err := config.Settings(b.AgentOverride)
-	if err != nil {
-		return workspace.AgentSettings{}, fmt.Errorf("%s: %w", filepath.Join(seriesCode, BooksDir, b.Code, BookFile), err)
-	}
-	return settings, nil
 }
 
 // Series is a named group of Books sharing a source language, a Dictionary and

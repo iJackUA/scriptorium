@@ -53,14 +53,14 @@ func FB2(source []byte) Fields {
 // InferText asks the Agent for the title and author apparent in a plain-text
 // Book's opening pages. Language is intentionally absent: it belongs to the
 // source chosen for the Series, not a text inference.
-func InferText(ctx context.Context, client agent.Agent, model agent.Model, source []byte) (Fields, error) {
+func InferText(ctx context.Context, client agent.Agent, model agent.Model, effort agent.Effort, source []byte) (Fields, error) {
 	const openingPageBytes = 12_000
 	if len(source) > openingPageBytes {
 		source = source[:openingPageBytes]
 	}
 	response, err := client.Call(ctx, agent.Request{
 		Model:  model,
-		Effort: agent.EffortLow,
+		Effort: effort,
 		Prompt: "Infer the title and author of this plain-text Book from its opening pages. Return only a JSON object with string fields title and author. Use empty strings when a field is unknown.\n\nOPENING PAGES:\n" + string(source),
 	})
 	if err != nil {

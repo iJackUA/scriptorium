@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/ijackua/scriptorium/internal/agent"
 )
 
 // ConfigFile is the name of the settings file at the workspace root.
@@ -51,24 +50,32 @@ func (w Workspace) SetTargetLanguages(tags []string) (Workspace, error) {
 	if !found {
 		return Workspace{}, fmt.Errorf("read %s: no languages setting", ConfigFile)
 	}
-	updated := strings.Join(lines, "\n")
-	temporary, err := os.CreateTemp(w.Root, ".workspace.toml-*")
+	if err := writeConfigAtomic(w.Root, path, strings.Join(lines, "\n")); err != nil {
+		return Workspace{}, err
+	}
+	return Open(w.Root)
+}
+
+// writeConfigAtomic replaces workspace.toml through a temporary file, so a
+// crash mid-write cannot leave the hand-written file half there.
+func writeConfigAtomic(root, path, body string) error {
+	temporary, err := os.CreateTemp(root, ".workspace.toml-*")
 	if err != nil {
-		return Workspace{}, fmt.Errorf("write %s: %w", ConfigFile, err)
+		return fmt.Errorf("write %s: %w", ConfigFile, err)
 	}
 	name := temporary.Name()
 	defer os.Remove(name)
-	if _, err := temporary.WriteString(updated); err != nil {
+	if _, err := temporary.WriteString(body); err != nil {
 		temporary.Close()
-		return Workspace{}, fmt.Errorf("write %s: %w", ConfigFile, err)
+		return fmt.Errorf("write %s: %w", ConfigFile, err)
 	}
 	if err := temporary.Close(); err != nil {
-		return Workspace{}, fmt.Errorf("write %s: %w", ConfigFile, err)
+		return fmt.Errorf("write %s: %w", ConfigFile, err)
 	}
 	if err := os.Rename(name, path); err != nil {
-		return Workspace{}, fmt.Errorf("write %s: %w", ConfigFile, err)
+		return fmt.Errorf("write %s: %w", ConfigFile, err)
 	}
-	return Open(w.Root)
+	return nil
 }
 
 func validateTargetLanguages(tags []string) error {
@@ -96,20 +103,18 @@ func quotedTags(tags []string) string {
 // Config is the contents of workspace.toml: the defaults every Series and Book
 // in this workspace inherits.
 type Config struct {
-	Agent                         string   `toml:"agent"`
 	Languages                     []string `toml:"languages"`
 	DictionaryOccurrenceThreshold int      `toml:"dictionary_occurrence_threshold"`
-	// Agents holds the Models of each known Agent, keyed by Agent name,
-	// because a Model name means something only to the Agent that accepts it.
-	// Resolve a Book's Agent and Models through Settings.
-	Agents map[string]Models `toml:"agents"`
+	// Choices is the default Agent, Model and Effort of each Task, with every
+	// field filled. Apply a Book's override through Resolve.
+	Choices
 }
 
-// configFile is the on-disk shape of workspace.toml: Config plus the top-level
-// [models] table written before Models were held per Agent.
+// configFile is the on-disk shape of workspace.toml: Config plus the settings
+// written before each Task had its own table.
 type configFile struct {
 	Config
-	Models Models `toml:"models"`
+	legacyConfig
 }
 
 // Workspace is an opened workspace root together with its Config.
@@ -159,10 +164,7 @@ func Open(root string) (Workspace, error) {
 		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
 	}
 	config := file.Config
-	if err := agent.ValidateName(config.Agent); err != nil {
-		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
-	}
-	if err := resolveAgents(&config, file.Models); err != nil {
+	if err := resolveChoices(&config, file.legacyConfig); err != nil {
 		return Workspace{}, fmt.Errorf("read %s: %w", ConfigFile, err)
 	}
 	if err := validateTargetLanguages(config.Languages); err != nil {
@@ -185,10 +187,6 @@ const defaultConfig = `# Scriptorium workspace settings.
 # it by hand whenever you like; Scriptorium reads this file and never rewrites
 # it, so these comments stay where you put them.
 
-# The Agent is the command-line AI tool Scriptorium spawns to translate.
-# "claude" is the only value with an implementation today.
-agent = "claude"
-
 # The target languages offered when adding a Translation Target to a Book.
 # Use canonical ISO 639-1 tags, for example "uk" for Ukrainian.
 languages = []
@@ -198,13 +196,22 @@ languages = []
 # less frequent recurring Terms.
 dictionary_occurrence_threshold = 2
 
-# Models are named in each Agent's own vocabulary, so each Agent keeps its own
-# pair — these are what the claude CLI accepts for --model. A Book may override
-# the Agent, the Models, or both in its book.toml.
-[agents.claude]
+# Each kind of work picks its own Agent, Model and Effort. The Agent is the
+# command-line AI tool Scriptorium spawns; "claude" is the only value with an
+# implementation today. Models are named in the Agent's own vocabulary — these
+# are what the claude CLI accepts for --model. Effort is low, medium, high,
+# xhigh or max. A Book may override any of them in its book.toml.
+
 # Mechanical work: inferring metadata, proposing Dictionary Terms. High volume,
 # low stakes, so this wants to be the cheap one.
-mechanical = "claude-haiku-4-5"
+[mechanical]
+agent = "claude"
+model = "claude-haiku-4-5"
+effort = "low"
+
 # Translation itself, where quality is the whole point.
-translation = "claude-opus-5"
+[translation]
+agent = "claude"
+model = "claude-opus-5"
+effort = "medium"
 `

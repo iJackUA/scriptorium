@@ -111,3 +111,7 @@ _Avoid_: API, backend, provider, LLM
 **Model**:
 The specific model an Agent is asked to use for one kind of task, named in that Agent's own vocabulary. A Model is meaningful only paired with the Agent that accepts it; there is no namespace shared across Agents. Chosen separately for mechanical work and for translation.
 _Avoid_: engine, AI
+
+**Effort**:
+How much reasoning an Agent spends on one request: `low`, `medium`, `high`, `xhigh`, or `max`. Chosen, like the Agent and the Model, separately for mechanical work and for translation — in the Workspace as a default, and per Book as an override.
+_Avoid_: thinking budget, reasoning level

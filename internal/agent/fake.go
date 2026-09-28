@@ -22,9 +22,24 @@ type Fake struct {
 	// Requests is the recorded transcript. Prefer RecordedRequests when a
 	// caller may inspect it while another goroutine is making calls.
 	Requests []Request
+
+	// Models and ModelsErr are what ListModels answers. Listing is not a
+	// Request and is not recorded as one.
+	Models    []ModelInfo
+	ModelsErr error
 }
 
-var _ Agent = (*Fake)(nil)
+var (
+	_ Agent       = (*Fake)(nil)
+	_ ModelLister = (*Fake)(nil)
+)
+
+// ListModels returns the scripted Model list.
+func (f *Fake) ListModels(context.Context) ([]ModelInfo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.Models), f.ModelsErr
+}
 
 // NewFake returns a Fake with the supplied response script.
 func NewFake(responses ...Response) *Fake {

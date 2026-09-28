@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ijackua/scriptorium/internal/agent"
 	"github.com/ijackua/scriptorium/internal/library"
 	"github.com/ijackua/scriptorium/internal/workspace"
 )
@@ -50,9 +51,12 @@ func seedLibrary(t *testing.T, root string) library.Store {
 
 func newTestServerFor(t *testing.T, session *workspace.Session) *Server {
 	t.Helper()
-	s, err := NewServer(session)
+	// The Fake stands in for the Agent even where a test never translates:
+	// the pickers ask the Agent for its Models, and a test must not start the
+	// real CLI to answer.
+	s, err := newServer(session, func(string, agent.Logger) (agent.Agent, error) { return agent.NewFake(), nil })
 	if err != nil {
-		t.Fatalf("NewServer: %v", err)
+		t.Fatalf("newServer: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s

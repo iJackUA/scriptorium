@@ -12,7 +12,6 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/ijackua/scriptorium/internal/agent"
 	"github.com/ijackua/scriptorium/internal/workspace"
 )
 
@@ -131,8 +130,7 @@ type bookFile struct {
 	AuthorEdited             bool   `toml:"author_edited"`
 	SourceFileLanguageEdited bool   `toml:"source_file_language_edited"`
 
-	Agent  string           `toml:"agent"`
-	Models workspace.Models `toml:"models"`
+	bookChoices
 }
 
 // BookMetadata is the editable detail set shown on a Book's details page.
@@ -190,10 +188,8 @@ func (s Store) books(seriesCode, sourceLanguage string) ([]Book, error) {
 			}
 			return nil, fmt.Errorf("read %s: %w", rel, err)
 		}
-		if file.Agent != "" {
-			if err := agent.ValidateName(file.Agent); err != nil {
-				return nil, fmt.Errorf("read %s: %w", rel, err)
-			}
+		if err := file.bookChoices.validate(); err != nil {
+			return nil, fmt.Errorf("read %s: %w", rel, err)
 		}
 		targets, err := s.translationTargets(seriesCode, entry.Name(), sourceLanguage)
 		if err != nil {
@@ -203,7 +199,7 @@ func (s Store) books(seriesCode, sourceLanguage string) ([]Book, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read Book %s: %w", entry.Name(), err)
 		}
-		books = append(books, Book{Code: entry.Name(), Title: file.Title, Author: file.Author, SourceFileLanguage: file.SourceFileLanguage, SourceFile: source, Targets: targets, AgentOverride: workspace.AgentSettings{Agent: file.Agent, Models: file.Models}})
+		books = append(books, Book{Code: entry.Name(), Title: file.Title, Author: file.Author, SourceFileLanguage: file.SourceFileLanguage, SourceFile: source, Targets: targets, Override: file.bookChoices.override()})
 	}
 	slices.SortFunc(books, func(a, b Book) int { return strings.Compare(a.Code, b.Code) })
 	return books, nil
@@ -1022,14 +1018,18 @@ title_edited = %t
 author_edited = %t
 source_file_language_edited = %t
 
-# The Agent and Models are inherited from workspace.toml. Uncomment to spend
-# more on this Book than on the rest, or less. Model names belong to the Agent
-# that accepts them: a Book naming another Agent inherits that Agent's Models
-# from workspace.toml, never the default Agent's.
+# The Agent, Model and Effort of each kind of work are inherited from
+# workspace.toml. Uncomment to spend more on this Book than on the rest, or
+# less. Model names belong to the Agent that accepts them: a Book that switches
+# a kind of work to another Agent must name that Agent's Model too.
 #
+# [mechanical]
 # agent = "claude"
+# model = "claude-haiku-4-5"
+# effort = "low"
 #
-# [models]
-# mechanical = "claude-haiku-4-5"
-# translation = "claude-opus-5"
+# [translation]
+# agent = "claude"
+# model = "claude-opus-5"
+# effort = "medium"
 `

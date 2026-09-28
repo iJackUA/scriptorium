@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 )
@@ -25,7 +26,23 @@ type Effort string
 const (
 	EffortLow    Effort = "low"
 	EffortMedium Effort = "medium"
+	EffortHigh   Effort = "high"
+	EffortXHigh  Effort = "xhigh"
+	EffortMax    Effort = "max"
 )
+
+// Efforts lists the Effort levels an Agent accepts, least to most.
+func Efforts() []Effort {
+	return []Effort{EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax}
+}
+
+// ValidateEffort checks an Effort named in configuration.
+func ValidateEffort(effort Effort) error {
+	if slices.Contains(Efforts(), effort) {
+		return nil
+	}
+	return fmt.Errorf("unknown Effort %q; use one of low, medium, high, xhigh or max", effort)
+}
 
 // Request is one plain language-model request. The adapter owns how its CLI
 // represents the system prompt and other invocation options; callers only
@@ -71,6 +88,9 @@ const (
 	// makes the CLI behave as a plain text model.
 	defaultSystemPrompt = "You are a plain language model. Follow the user's request and return only the requested result. Do not use tools."
 )
+
+// Names lists the Agents the current build has adapters for.
+func Names() []string { return []string{ClaudeName} }
 
 // ValidateName checks the Agent names accepted by the current build.
 func ValidateName(name string) error {

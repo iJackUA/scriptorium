@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ijackua/scriptorium/internal/agent"
 )
 
 func openConfig(t *testing.T, body string) (Workspace, error) {
@@ -16,137 +18,181 @@ func openConfig(t *testing.T, body string) (Workspace, error) {
 	return Open(root)
 }
 
-func TestTheDefaultConfigHoldsModelsForEveryKnownAgent(t *testing.T) {
+func TestTheDefaultConfigChoosesACheapAndAStrongModel(t *testing.T) {
 	ws, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	settings, err := ws.Config.Settings(AgentSettings{})
-	if err != nil {
-		t.Fatalf("Settings: %v", err)
+	mechanical, translation := ws.Config.Mechanical, ws.Config.Translation
+	if mechanical != (Choice{Agent: "claude", Model: "claude-haiku-4-5", Effort: agent.EffortLow}) {
+		t.Errorf("mechanical = %+v, want the cheap Model at low Effort", mechanical)
 	}
-	if settings.Agent != "claude" {
-		t.Errorf("default Agent = %q, want claude", settings.Agent)
-	}
-	if settings.Models.Mechanical == "" || settings.Models.Translation == "" || settings.Models.Mechanical == settings.Models.Translation {
-		t.Errorf("default Models = %+v, want a distinct cheap and strong Model", settings.Models)
+	if translation != (Choice{Agent: "claude", Model: "claude-opus-5", Effort: agent.EffortMedium}) {
+		t.Errorf("translation = %+v, want the strong Model at medium Effort", translation)
 	}
 	written := read(t, filepath.Join(ws.Root, ConfigFile))
-	if !strings.Contains(written, "[agents.claude]") {
-		t.Errorf("workspace.toml does not hold Models under the Agent they belong to:\n%s", written)
-	}
-}
-
-func TestModelsAreReadPerAgent(t *testing.T) {
-	ws, err := openConfig(t, "agent = \"claude\"\nlanguages = []\n\n[agents.claude]\nmechanical = \"cheap\"\ntranslation = \"strong\"\n")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	settings, err := ws.Config.Settings(AgentSettings{})
-	if err != nil {
-		t.Fatalf("Settings: %v", err)
-	}
-	if settings.Models != (Models{Mechanical: "cheap", Translation: "strong"}) {
-		t.Errorf("Models = %+v, want cheap and strong", settings.Models)
-	}
-}
-
-// Workspaces written before Models were held per Agent have a top-level
-// [models] table, and Scriptorium never rewrites workspace.toml, so that
-// table must still mean the default Agent's Models.
-func TestALegacyModelsTableBelongsToTheDefaultAgent(t *testing.T) {
-	ws, err := openConfig(t, "agent = \"claude\"\nlanguages = []\n\n[models]\nmechanical = \"cheap\"\ntranslation = \"strong\"\n")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	settings, err := ws.Config.Settings(AgentSettings{})
-	if err != nil {
-		t.Fatalf("Settings: %v", err)
-	}
-	if settings.Models != (Models{Mechanical: "cheap", Translation: "strong"}) {
-		t.Errorf("Models = %+v, want the legacy table", settings.Models)
-	}
-}
-
-func TestModelsForAnUnknownAgentAreRejected(t *testing.T) {
-	_, err := openConfig(t, "agent = \"claude\"\nlanguages = []\n\n[agents.claude]\nmechanical = \"a\"\ntranslation = \"b\"\n\n[agents.gpt]\nmechanical = \"c\"\ntranslation = \"d\"\n")
-	if err == nil || !strings.Contains(err.Error(), "gpt") {
-		t.Fatalf("Open = %v, want the unknown Agent named", err)
-	}
-}
-
-// The application must work with no setup, including from a workspace.toml
-// trimmed down by hand: a known Agent's missing Model falls back to that
-// Agent's own built-in default, never to another Agent's.
-func TestAnUnsetModelFallsBackToItsAgentsBuiltInDefault(t *testing.T) {
-	ws, err := openConfig(t, "agent = \"claude\"\n\n[agents.claude]\nmechanical = \"cheap\"\n")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	settings, err := ws.Config.Settings(AgentSettings{})
-	if err != nil {
-		t.Fatalf("Settings: %v", err)
-	}
-	if settings.Models.Mechanical != "cheap" || settings.Models.Translation != builtInModels["claude"].Translation {
-		t.Errorf("Models = %+v, want the configured mechanical and the built-in translation Model", settings.Models)
-	}
-}
-
-func TestTheWrittenDefaultsAreTheBuiltInOnes(t *testing.T) {
-	ws, err := Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	written := read(t, filepath.Join(ws.Root, ConfigFile))
-	for name, models := range builtInModels {
-		for _, model := range []string{models.Mechanical, models.Translation} {
-			if !strings.Contains(written, `"`+model+`"`) {
-				t.Errorf("workspace.toml does not write %s's built-in Model %q", name, model)
-			}
+	for _, want := range []string{"[mechanical]", "[translation]"} {
+		if !strings.Contains(written, want) {
+			t.Errorf("workspace.toml does not carry %s:\n%s", want, written)
 		}
 	}
 }
 
-func TestABookOverrideWinsModelByModel(t *testing.T) {
-	config := Config{Agent: "claude", Agents: map[string]Models{"claude": {Mechanical: "cheap", Translation: "strong"}}}
-
-	settings, err := config.Settings(AgentSettings{Agent: "claude", Models: Models{Translation: "strongest"}})
+func TestEachTaskReadsItsOwnTable(t *testing.T) {
+	ws, err := openConfig(t, "languages = []\n\n[mechanical]\nagent = \"claude\"\nmodel = \"cheap\"\neffort = \"medium\"\n\n[translation]\nmodel = \"strong\"\neffort = \"max\"\n")
 	if err != nil {
-		t.Fatalf("Settings: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
-	if settings != (AgentSettings{Agent: "claude", Models: Models{Mechanical: "cheap", Translation: "strongest"}}) {
-		t.Errorf("Settings = %+v, want the translation override over the inherited mechanical Model", settings)
+	if got := ws.Config.Mechanical; got != (Choice{Agent: "claude", Model: "cheap", Effort: agent.EffortMedium}) {
+		t.Errorf("mechanical = %+v", got)
+	}
+	if got := ws.Config.Translation; got != (Choice{Agent: "claude", Model: "strong", Effort: agent.EffortMax}) {
+		t.Errorf("translation = %+v", got)
 	}
 }
 
-func TestAnOverriddenAgentInheritsOnlyItsOwnModels(t *testing.T) {
-	config := Config{Agent: "claude", Agents: map[string]Models{
-		"claude": {Mechanical: "claude-cheap", Translation: "claude-strong"},
-		"codex":  {Mechanical: "codex-cheap", Translation: "codex-strong"},
+// Workspaces written before each Task had its own table name one Agent and a
+// [models] or [agents.<name>] table, and Scriptorium never rewrites
+// workspace.toml, so those must still be read.
+func TestLegacyAgentAndModelsAreStillRead(t *testing.T) {
+	for name, body := range map[string]string{
+		"[models]":        "agent = \"claude\"\n\n[models]\nmechanical = \"cheap\"\ntranslation = \"strong\"\n",
+		"[agents.claude]": "agent = \"claude\"\n\n[agents.claude]\nmechanical = \"cheap\"\ntranslation = \"strong\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			ws, err := openConfig(t, body)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			if ws.Config.Mechanical.Model != "cheap" || ws.Config.Translation.Model != "strong" {
+				t.Errorf("Choices = %+v, want the legacy Models", ws.Config.Choices)
+			}
+		})
+	}
+}
+
+func TestAnUnsetFieldFallsBackToItsBuiltInDefault(t *testing.T) {
+	ws, err := openConfig(t, "[translation]\nmodel = \"strong\"\n")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := ws.Config.Translation; got != (Choice{Agent: "claude", Model: "strong", Effort: agent.EffortMedium}) {
+		t.Errorf("translation = %+v, want the built-in Agent and Effort around the configured Model", got)
+	}
+	if got := ws.Config.Mechanical.Model; got != BuiltInModel("claude", TaskMechanical) {
+		t.Errorf("mechanical Model = %q, want the built-in one", got)
+	}
+}
+
+func TestUnknownAgentsAndEffortsAreRejectedOnOpen(t *testing.T) {
+	for body, want := range map[string]string{
+		"[translation]\nagent = \"gpt\"\n":     "gpt",
+		"[mechanical]\neffort = \"extreme\"\n": "extreme",
+		"[agents.gpt]\ntranslation = \"x\"\n":  "gpt",
+		"agent = \"codex\"\n":                  "codex",
+	} {
+		if _, err := openConfig(t, body); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Open(%q) = %v, want %q named", body, err, want)
+		}
+	}
+}
+
+func TestSettingAChoiceRewritesOnlyItsTable(t *testing.T) {
+	ws, err := openConfig(t, "# my own note, please keep\nlanguages = [\"de\"]\n\n[translation]\n# the strong one\nmodel = \"strong\"\n")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	updated, err := ws.SetChoice(TaskMechanical, Choice{Agent: "claude", Model: "claude-sonnet-5", Effort: agent.EffortHigh})
+	if err != nil {
+		t.Fatalf("SetChoice: %v", err)
+	}
+	if got := updated.Config.Mechanical; got != (Choice{Agent: "claude", Model: "claude-sonnet-5", Effort: agent.EffortHigh}) {
+		t.Errorf("mechanical = %+v, want the saved Choice applied immediately", got)
+	}
+	written := read(t, filepath.Join(ws.Root, ConfigFile))
+	for _, want := range []string{"# my own note, please keep", "# the strong one", "model = \"strong\"", "[mechanical]\n", "model = \"claude-sonnet-5\""} {
+		if !strings.Contains(written, want) {
+			t.Errorf("workspace.toml does not keep %q:\n%s", want, written)
+		}
+	}
+	reopened, err := Open(ws.Root)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if reopened.Config.Choices != updated.Config.Choices {
+		t.Errorf("reopened Choices = %+v, want %+v", reopened.Config.Choices, updated.Config.Choices)
+	}
+}
+
+func TestAnInvalidChoiceIsNotSaved(t *testing.T) {
+	ws, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	before := read(t, filepath.Join(ws.Root, ConfigFile))
+	for _, choice := range []Choice{
+		{Agent: "gpt", Model: "x", Effort: agent.EffortLow},
+		{Agent: "claude", Model: "", Effort: agent.EffortLow},
+		{Agent: "claude", Model: "x", Effort: "extreme"},
+	} {
+		if _, err := ws.SetChoice(TaskTranslation, choice); err == nil {
+			t.Errorf("SetChoice(%+v) succeeded", choice)
+		}
+	}
+	if read(t, filepath.Join(ws.Root, ConfigFile)) != before {
+		t.Error("a rejected Choice rewrote workspace.toml")
+	}
+}
+
+func TestABookOverrideWinsFieldByField(t *testing.T) {
+	config := Config{Choices: Choices{
+		Mechanical:  Choice{Agent: "claude", Model: "cheap", Effort: agent.EffortLow},
+		Translation: Choice{Agent: "claude", Model: "strong", Effort: agent.EffortMedium},
 	}}
 
-	settings, err := config.Settings(AgentSettings{Agent: "codex"})
+	resolved, err := config.Resolve(Choices{Translation: Choice{Model: "strongest", Effort: agent.EffortMax}})
 	if err != nil {
-		t.Fatalf("Settings: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
-	if settings.Models != (Models{Mechanical: "codex-cheap", Translation: "codex-strong"}) {
-		t.Errorf("Models = %+v, want codex's own Models", settings.Models)
+	if resolved.Translation != (Choice{Agent: "claude", Model: "strongest", Effort: agent.EffortMax}) {
+		t.Errorf("translation = %+v, want the override over the inherited Agent", resolved.Translation)
+	}
+	if resolved.Mechanical != config.Mechanical {
+		t.Errorf("mechanical = %+v, want it inherited untouched", resolved.Mechanical)
 	}
 }
 
-// Model names are an Agent's own vocabulary. A Book that switches Agent with
-// nothing to inherit in that Agent's namespace must not quietly borrow the
-// default Agent's Models and fail halfway through a book.
-func TestAnOverriddenAgentWithoutModelsOfItsOwnIsRejected(t *testing.T) {
-	config := Config{Agent: "claude", Agents: map[string]Models{"claude": {Mechanical: "claude-cheap", Translation: "claude-strong"}}}
+// Model names are an Agent's own vocabulary. A Book that switches a Task to
+// another Agent must not quietly borrow the workspace's Model for it and fail
+// halfway through a Book.
+func TestAnOverriddenAgentWithoutAModelIsRejected(t *testing.T) {
+	config := Config{Choices: Choices{
+		Mechanical:  Choice{Agent: "claude", Model: "claude-haiku-4-5", Effort: agent.EffortLow},
+		Translation: Choice{Agent: "codex", Model: "gpt-strong", Effort: agent.EffortMedium},
+	}}
 
-	_, err := config.Settings(AgentSettings{Agent: "codex", Models: Models{Mechanical: "codex-cheap"}})
+	_, err := config.Resolve(Choices{Translation: Choice{Agent: "claude"}})
 	if err == nil {
-		t.Fatal("Settings accepted codex with claude's translation Model")
+		t.Fatal("Resolve accepted claude with codex's Model")
 	}
-	for _, want := range []string{`"codex"`, `"claude-strong"`, "translation"} {
+	for _, want := range []string{`"claude"`, `"gpt-strong"`, "translation"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error = %v, want it to name %s", err, want)
 		}
+	}
+}
+
+func TestAnOverrideNamingItsInheritedAgentNeedsNoModel(t *testing.T) {
+	ws, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	resolved, err := ws.Config.Resolve(Choices{Translation: Choice{Agent: "claude"}})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved != ws.Config.Choices {
+		t.Errorf("Resolve = %+v, want the workspace Choices", resolved)
 	}
 }

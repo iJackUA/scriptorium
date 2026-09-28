@@ -126,6 +126,22 @@ func (s *Session) SetTargetLanguages(tags []string) error {
 	return nil
 }
 
+// SetChoice updates one Task's default Agent, Model and Effort in the open
+// Workspace and makes it available to this running session immediately.
+func (s *Session) SetChoice(task Task, choice Choice) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current == nil {
+		return errors.New("no Workspace is open")
+	}
+	updated, err := s.current.SetChoice(task, choice)
+	if err != nil {
+		return err
+	}
+	s.current = &updated
+	return nil
+}
+
 // report records a failure for the user to read, leaving any open workspace
 // alone — a failed attempt to open a different folder is no reason to close
 // the one that works.

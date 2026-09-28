@@ -36,7 +36,9 @@ type Translator struct {
 	Root             string
 	Agent            agent.Agent
 	TranslationModel agent.Model
-	ChunkWordBudget  int
+	// TranslationEffort is left to the Agent's own default when empty.
+	TranslationEffort agent.Effort
+	ChunkWordBudget   int
 	// Report receives durable progress snapshots after state.json has been
 	// updated. It is optional so command-line and test callers stay simple.
 	Report func(Progress)
@@ -505,7 +507,7 @@ func (t Translator) translateChunk(ctx context.Context, targetDirectory, templat
 	var cost float64
 
 	call := func(prompt string, nodes []format.TextNode) ([]format.TextNode, bool, error) {
-		response, err := t.Agent.Call(ctx, agent.Request{Model: t.TranslationModel, Prompt: prompt})
+		response, err := t.Agent.Call(ctx, agent.Request{Model: t.TranslationModel, Effort: t.TranslationEffort, Prompt: prompt})
 		attempts++
 		cost += response.Cost
 		if err != nil {

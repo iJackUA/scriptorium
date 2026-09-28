@@ -30,10 +30,19 @@ type DictionaryProgress struct {
 // DictionaryBuilder performs the two Dictionary Building passes. The Agent is
 // injected because it is the boundary for nondeterministic external work.
 type DictionaryBuilder struct {
-	Agent               agent.Agent
-	MechanicalModel     agent.Model
+	Agent           agent.Agent
+	MechanicalModel agent.Model
+	// MechanicalEffort defaults to low, which is what extraction wants.
+	MechanicalEffort    agent.Effort
 	OccurrenceThreshold int
 	ChunkWordBudget     int
+}
+
+func (b DictionaryBuilder) effort() agent.Effort {
+	if b.MechanicalEffort == "" {
+		return agent.EffortLow
+	}
+	return b.MechanicalEffort
 }
 
 // Build extracts candidate Terms from each Chunk, retains only recurring
@@ -55,7 +64,7 @@ func (b DictionaryBuilder) Build(ctx context.Context, nodes []format.TextNode, s
 		if report != nil {
 			report(DictionaryProgress{Completed: index, Active: index + 1, Total: len(chunks)})
 		}
-		response, err := b.Agent.Call(ctx, agent.Request{Model: b.MechanicalModel, Effort: agent.EffortLow, Prompt: extractionPrompt(chunk)})
+		response, err := b.Agent.Call(ctx, agent.Request{Model: b.MechanicalModel, Effort: b.effort(), Prompt: extractionPrompt(chunk)})
 		if err != nil {
 			return nil, fmt.Errorf("extract Terms from Chunk %d: %w", chunk.Index+1, err)
 		}
@@ -79,7 +88,7 @@ func (b DictionaryBuilder) Build(ctx context.Context, nodes []format.TextNode, s
 	}
 	response, err := b.Agent.Call(ctx, agent.Request{
 		Model:  b.MechanicalModel,
-		Effort: agent.EffortLow,
+		Effort: b.effort(),
 		Prompt: termTranslationPrompt(surviving, sourceLanguage, targetLanguage),
 	})
 	if err != nil {
