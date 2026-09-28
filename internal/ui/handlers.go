@@ -386,7 +386,7 @@ func (s screens) updateBookMetadata(w http.ResponseWriter, r *http.Request) {
 		s.detail(w, r, err.Error())
 		return
 	}
-	s.bookDetail(w, r)
+	s.detailNotice(w, r, "Book metadata saved.")
 }
 
 type targetOption struct {
@@ -1138,6 +1138,14 @@ func (s screens) renderBookDetail(w http.ResponseWriter, r *http.Request, lib li
 			return
 		}
 		body += books
+	}
+	if notice != "" && r.Header.Get("HX-Request") == "true" {
+		toast, err := execute("toast", notice)
+		if err != nil {
+			fail(w, "toast", err)
+			return
+		}
+		body += toast
 	}
 	write(w, body)
 }

@@ -276,6 +276,18 @@ func TestLanguageControlsPositionModalDropdownsInTheDialogTopLayer(t *testing.T)
 	}
 }
 
+func TestActionToastUsesDaisyUIPlacementAndAnimatedRemoval(t *testing.T) {
+	body, err := execute("layout", template.HTML(""))
+	if err != nil {
+		t.Fatalf("render layout: %v", err)
+	}
+	for _, want := range []string{`class="toast toast-center"`, "window.setTimeout(function () { hideToast(toast); }, 5000)", "toast-hiding", "window.setTimeout(function () { toast.remove(); }, 200)"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("action toast is missing %q", want)
+		}
+	}
+}
+
 func TestStaticDirectoryIsNotListed(t *testing.T) {
 	s := newTestServer(t)
 

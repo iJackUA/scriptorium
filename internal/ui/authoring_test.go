@@ -559,6 +559,9 @@ func TestPrepareTextChunksActionPersistsBookChunks(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Prepared 1 Text Chunks.") {
 		t.Fatalf("Prepare Text Chunks response = %d\n%s", rec.Code, rec.Body.String())
 	}
+	if body := rec.Body.String(); !strings.Contains(body, `id="toast-region" hx-swap-oob="innerHTML"`) || !strings.Contains(body, `class="toast-notification alert alert-success text-control"`) || strings.Contains(body, `<p class="text-success text-control" role="status">`) {
+		t.Errorf("Prepare Text Chunks notice was not rendered as a toast:\n%s", body)
+	}
 	for _, path := range []string{
 		filepath.Join(root, "solaris", "books", "solaris", "chunks", "manifest.json"),
 		filepath.Join(root, "solaris", "books", "solaris", "chunks", "original", "0.txt"),

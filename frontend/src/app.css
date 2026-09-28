@@ -137,6 +137,21 @@
   --text-micro--letter-spacing: -0.01em;
 }
 
+/* daisyUI positions the toast container; these two short transitions make
+   server-rendered action feedback feel present without delaying its removal. */
+@keyframes toast-enter {
+  from { opacity: 0; transform: translateY(0.75rem); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes toast-exit {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(0.75rem); }
+}
+
+.toast-notification { animation: toast-enter 200ms ease-out both; }
+.toast-notification.toast-hiding { animation: toast-exit 200ms ease-in both; }
+
 @layer base {
   html {
     -webkit-font-smoothing: antialiased;

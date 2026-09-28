@@ -13,6 +13,7 @@
 </head>
 <body class="bg-base-200 text-base-content font-sans min-h-screen">
   <div id="app">{{.}}</div>
+  <div id="toast-region" class="toast toast-center" aria-live="polite" aria-atomic="true"></div>
   <script>
     function languageControls(root) {
       root.querySelectorAll('select.language-select').forEach(function (select) {
@@ -54,6 +55,24 @@
     }
     document.addEventListener('DOMContentLoaded', function () { connectProgress(document); });
     document.body.addEventListener('htmx:afterSwap', function (event) { connectProgress(event.target); });
+    var toastTimer;
+    function scheduleToast(root) {
+      var toast = root.querySelector ? root.querySelector('[data-toast]') : null;
+      if (!toast) return;
+      window.clearTimeout(toastTimer);
+      toastTimer = window.setTimeout(function () { hideToast(toast); }, 5000);
+    }
+    document.body.addEventListener('htmx:afterSwap', function (event) { scheduleToast(event.target); });
+    document.body.addEventListener('htmx:oobAfterSwap', function (event) { scheduleToast(event.target); });
+    function dismissToast(button) {
+      window.clearTimeout(toastTimer);
+      hideToast(button.closest('[data-toast]'));
+    }
+    function hideToast(toast) {
+      if (!toast || toast.classList.contains('toast-hiding')) return;
+      toast.classList.add('toast-hiding');
+      window.setTimeout(function () { toast.remove(); }, 200);
+    }
   </script>
 </body>
 </html>{{end}}

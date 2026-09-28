@@ -3,7 +3,6 @@
   <div class="card-body gap-4">
     <h2 class="card-title text-title">{{.Book.Label}}</h2>
     {{template "form-problem" .Problem}}
-    {{if .Notice}}<p class="text-success text-control" role="status">{{.Notice}}</p>{{end}}
     <section class="flex flex-col gap-3">
       <h3 class="section-label">Metadata</h3>
       <form class="grid grid-cols-1 gap-3 sm:grid-cols-2" hx-post="/series/{{.Series.Code}}/books/{{.Book.Code}}/metadata" hx-target="#book-detail" hx-swap="innerHTML">
@@ -88,6 +87,8 @@
   </div>
 </div>
 {{end}}
+
+{{define "toast"}}<div id="toast-region" hx-swap-oob="innerHTML"><div data-toast class="toast-notification alert alert-success text-control" role="status"><span>{{.}}</span><button class="btn btn-ghost btn-xs btn-square rounded-selector" type="button" aria-label="Dismiss notification" onclick="dismissToast(this)">&times;</button></div></div>{{end}}
 
 {{define "dictionary-review-content"}}
 <h3 class="text-subhead">Manage Dictionary: {{languageName .Language}} ({{.Language}})</h3>
