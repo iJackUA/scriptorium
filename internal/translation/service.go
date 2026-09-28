@@ -195,7 +195,7 @@ func (t Translator) resumeTranslation(ctx context.Context, seriesCode, bookCode,
 	if err != nil {
 		return "", err
 	}
-	template, err := LoadPromptTemplate(t.Root, seriesCode)
+	template, err := LoadPrompt(t.Root, seriesCode, bookCode, PromptTranslation)
 	if err != nil {
 		return "", err
 	}

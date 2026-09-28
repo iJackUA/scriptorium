@@ -36,6 +36,10 @@ type DictionaryBuilder struct {
 	MechanicalEffort    agent.Effort
 	OccurrenceThreshold int
 	ChunkWordBudget     int
+	// ExtractionTemplate and TermTranslationTemplate are the Book's resolved
+	// PromptTermExtraction and PromptTermTranslation; empty means built-in.
+	ExtractionTemplate      string
+	TermTranslationTemplate string
 }
 
 func (b DictionaryBuilder) effort() agent.Effort {
@@ -64,7 +68,7 @@ func (b DictionaryBuilder) Build(ctx context.Context, nodes []format.TextNode, s
 		if report != nil {
 			report(DictionaryProgress{Completed: index, Active: index + 1, Total: len(chunks)})
 		}
-		response, err := b.Agent.Call(ctx, agent.Request{Model: b.MechanicalModel, Effort: b.effort(), Prompt: extractionPrompt(chunk)})
+		response, err := b.Agent.Call(ctx, agent.Request{Model: b.MechanicalModel, Effort: b.effort(), Prompt: extractionPrompt(orBuiltIn(b.ExtractionTemplate, PromptTermExtraction), chunk)})
 		if err != nil {
 			return nil, fmt.Errorf("extract Terms from Chunk %d: %w", chunk.Index+1, err)
 		}
@@ -89,7 +93,7 @@ func (b DictionaryBuilder) Build(ctx context.Context, nodes []format.TextNode, s
 	response, err := b.Agent.Call(ctx, agent.Request{
 		Model:  b.MechanicalModel,
 		Effort: b.effort(),
-		Prompt: termTranslationPrompt(surviving, sourceLanguage, targetLanguage),
+		Prompt: termTranslationPrompt(orBuiltIn(b.TermTranslationTemplate, PromptTermTranslation), surviving, sourceLanguage, targetLanguage),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("translate Dictionary Terms: %w", err)
@@ -101,13 +105,19 @@ func (b DictionaryBuilder) Build(ctx context.Context, nodes []format.TextNode, s
 	return terms, nil
 }
 
-func extractionPrompt(chunk Chunk) string {
-	var prompt strings.Builder
-	prompt.WriteString("List candidate recurring names, places, and coined terms verbatim from these source-language Text Nodes. Output one source term per line and nothing else.\n\n")
-	for _, node := range chunk.Nodes {
-		fmt.Fprintf(&prompt, "[%d]\n%s\n\n", node.Index, node.Text)
+func orBuiltIn(configured string, p Prompt) string {
+	if configured == "" {
+		return p.BuiltIn()
 	}
-	return prompt.String()
+	return configured
+}
+
+func extractionPrompt(template string, chunk Chunk) string {
+	var nodes strings.Builder
+	for _, node := range chunk.Nodes {
+		fmt.Fprintf(&nodes, "[%d]\n%s\n\n", node.Index, node.Text)
+	}
+	return strings.ReplaceAll(template, textNodesSlot, nodes.String())
 }
 
 func termsFromExtraction(result string) map[string]struct{} {
@@ -121,8 +131,12 @@ func termsFromExtraction(result string) map[string]struct{} {
 	return terms
 }
 
-func termTranslationPrompt(terms []string, sourceLanguage, targetLanguage string) string {
-	return fmt.Sprintf("Render this complete Dictionary Term set coherently from %s to %s. Output only raw TSV: exactly one row per supplied Term, with original, translation, note columns; leave note blank when unnecessary. Do not add Markdown, headings, labels, or commentary.\n\n%s", sourceLanguage, targetLanguage, strings.Join(terms, "\n"))
+func termTranslationPrompt(template string, terms []string, sourceLanguage, targetLanguage string) string {
+	return strings.NewReplacer(
+		sourceLanguageSlot, sourceLanguage,
+		targetLanguageSlot, targetLanguage,
+		termsSlot, strings.Join(terms, "\n"),
+	).Replace(template)
 }
 
 func translatedTerms(result string, expected []string) ([]Term, error) {

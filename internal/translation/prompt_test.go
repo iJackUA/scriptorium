@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ijackua/scriptorium/internal/agent"
+	"github.com/ijackua/scriptorium/internal/format"
 	"github.com/ijackua/scriptorium/internal/library"
 )
 
@@ -85,7 +86,7 @@ func TestAnOverrideMissingASlotFailsBeforeAnyRequest(t *testing.T) {
 	}
 }
 
-func TestLoadPromptTemplateNamesEveryMissingSlot(t *testing.T) {
+func TestLoadPromptNamesEveryMissingSlot(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "holmes"), 0o755); err != nil {
 		t.Fatal(err)
@@ -94,9 +95,9 @@ func TestLoadPromptTemplateNamesEveryMissingSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := LoadPromptTemplate(root, "holmes")
+	_, err := LoadPrompt(root, "holmes", "adventures", PromptTranslation)
 	if err == nil {
-		t.Fatal("LoadPromptTemplate accepted an incomplete override")
+		t.Fatal("LoadPrompt accepted an incomplete override")
 	}
 	for _, want := range []string{"{{TARGET_LANGUAGE}}", "{{DICTIONARY}}", "{{CONTINUITY_WINDOW}}", "{{NUMBERED_NODE_INSTRUCTIONS}}"} {
 		if !strings.Contains(err.Error(), want) {
@@ -107,5 +108,113 @@ func TestLoadPromptTemplateNamesEveryMissingSlot(t *testing.T) {
 		if strings.Contains(err.Error(), present) {
 			t.Errorf("error = %v, names %s, which is present", err, present)
 		}
+	}
+}
+
+func writePrompt(t *testing.T, root, rel, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, rel), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTheMostSpecificPromptOverrideWins(t *testing.T) {
+	root := t.TempDir()
+	load := func() string {
+		t.Helper()
+		template, err := LoadPrompt(root, "holmes", "adventures", PromptTranslation)
+		if err != nil {
+			t.Fatalf("LoadPrompt: %v", err)
+		}
+		return template
+	}
+	if got := load(); got != DefaultPromptTemplate {
+		t.Fatalf("with no override, got:\n%s", got)
+	}
+	workspacePrompt := "Workspace. " + archaicPrompt
+	writePrompt(t, root, WorkspacePromptFile(PromptTranslation), workspacePrompt)
+	if got := load(); got != workspacePrompt {
+		t.Errorf("the workspace override was not used:\n%s", got)
+	}
+	seriesPrompt := "Series. " + archaicPrompt
+	writePrompt(t, root, filepath.Join("holmes", library.PromptFile), seriesPrompt)
+	if got := load(); got != seriesPrompt {
+		t.Errorf("the Series override did not beat the workspace:\n%s", got)
+	}
+	bookPrompt := "Book. " + archaicPrompt
+	writePrompt(t, root, BookPromptFile("holmes", "adventures", PromptTranslation), bookPrompt)
+	if got := load(); got != bookPrompt {
+		t.Errorf("the Book override did not beat the Series:\n%s", got)
+	}
+	other, err := LoadPrompt(root, "holmes", "memoirs", PromptTranslation)
+	if err != nil {
+		t.Fatalf("LoadPrompt: %v", err)
+	}
+	if other != seriesPrompt {
+		t.Errorf("another Book of the Series got:\n%s", other)
+	}
+}
+
+func TestDictionaryPromptsAreOverriddenByTheWorkspaceAndTheBook(t *testing.T) {
+	root := t.TempDir()
+	writePrompt(t, root, WorkspacePromptFile(PromptTermExtraction), "Workspace extraction {{TEXT_NODES}}")
+	writePrompt(t, root, BookPromptFile("holmes", "adventures", PromptTermTranslation), "Book terms {{SOURCE_LANGUAGE}} {{TARGET_LANGUAGE}} {{TERMS}}")
+	writePrompt(t, root, filepath.Join("holmes", library.PromptFile), "The Series prompt.md is only for translation.")
+
+	for prompt, want := range map[Prompt]string{
+		PromptTermExtraction:  "Workspace extraction {{TEXT_NODES}}",
+		PromptTermTranslation: "Book terms {{SOURCE_LANGUAGE}} {{TARGET_LANGUAGE}} {{TERMS}}",
+	} {
+		got, err := LoadPrompt(root, "holmes", "adventures", prompt)
+		if err != nil {
+			t.Fatalf("LoadPrompt %s: %v", prompt, err)
+		}
+		if got != want {
+			t.Errorf("%s = %q, want %q", prompt, got, want)
+		}
+	}
+	if got, _ := LoadPrompt(root, "holmes", "memoirs", PromptTermTranslation); got != PromptTermTranslation.BuiltIn() {
+		t.Errorf("another Book got the Book override:\n%s", got)
+	}
+}
+
+func TestSavingAPromptWithoutARequiredSlotWritesNothing(t *testing.T) {
+	root := t.TempDir()
+	file := BookPromptFile("holmes", "adventures", PromptTermTranslation)
+
+	err := SavePrompt(root, file, PromptTermTranslation, "Translate {{TERMS}}.")
+	if err == nil || !strings.Contains(err.Error(), "{{SOURCE_LANGUAGE}}") || !strings.Contains(err.Error(), file) {
+		t.Fatalf("SavePrompt error = %v, want the missing slot and the file named", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, file)); !os.IsNotExist(err) {
+		t.Errorf("an invalid prompt was written: %v", err)
+	}
+}
+
+func TestDictionaryBuildingSendsTheSuppliedTemplates(t *testing.T) {
+	fake := agent.NewFake(agent.Response{Result: "Holmes"}, agent.Response{Result: "Holmes"}, agent.Response{Result: "Holmes\tГолмс\t"})
+
+	_, err := DictionaryBuilder{
+		Agent:                   fake,
+		MechanicalModel:         "cheap",
+		ChunkWordBudget:         2,
+		ExtractionTemplate:      "Names only, please:\n{{TEXT_NODES}}",
+		TermTranslationTemplate: "Terms {{SOURCE_LANGUAGE}}>{{TARGET_LANGUAGE}}:\n{{TERMS}}",
+	}.Build(context.Background(), []format.TextNode{{Index: 0, Text: "Holmes spoke."}, {Index: 1, Text: "Holmes left."}}, "en", "uk", nil)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	requests := fake.RecordedRequests()
+	if len(requests) != 3 {
+		t.Fatalf("requests = %d, want 3", len(requests))
+	}
+	if got, want := requests[0].Prompt, "Names only, please:\n[0]\nHolmes spoke.\n\n"; got != want {
+		t.Errorf("extraction prompt = %q, want %q", got, want)
+	}
+	if got, want := requests[2].Prompt, "Terms en>uk:\nHolmes"; got != want {
+		t.Errorf("term translation prompt = %q, want %q", got, want)
 	}
 }

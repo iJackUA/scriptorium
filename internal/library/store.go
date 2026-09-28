@@ -24,6 +24,9 @@ const (
 	// PromptFile optionally replaces the built-in translation prompt for every
 	// Book in its Series.
 	PromptFile = "prompt.md"
+	// PromptsDir holds prompt overrides, one file per prompt, both at the
+	// workspace root and in a Book's folder.
+	PromptsDir = "prompts"
 	// BooksDir holds one folder per Book, named by its Book Code.
 	BooksDir = "books"
 	// BookFile holds a Book's metadata.

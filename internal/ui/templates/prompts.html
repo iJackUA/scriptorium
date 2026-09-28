@@ -1,0 +1,32 @@
+{{/*
+  One editor per Prompt. Until this level has its own file, the textarea holds
+  the prompt the level inherits — the built-in one when nothing overrides it —
+  and saving is what writes the file. Each editor swaps only itself.
+*/}}
+{{define "prompt-editors"}}
+<div class="flex flex-col gap-2">{{range .}}{{template "prompt-editor" .}}{{end}}</div>
+{{end}}
+
+{{define "prompt-editor"}}
+<details id="{{.ID}}" class="rounded-field border border-base-300 px-3 py-2" data-testid="{{.ID}}" {{if .Open}}open{{end}}>
+  <summary class="flex cursor-pointer items-center gap-2 text-control font-semibold">
+    <span>{{.Label}}</span>
+    <span class="badge badge-sm badge-soft whitespace-nowrap text-micro {{if .Customized}}badge-info{{else}}badge-neutral{{end}}">{{if .Customized}}Customized{{else if .InheritedFile}}Inherited{{else}}Built-in{{end}}</span>
+  </summary>
+  <form class="mt-2 flex flex-col gap-2" hx-post="{{.Action}}" hx-target="#{{.ID}}" hx-swap="outerHTML">
+    {{template "form-problem" .Problem}}
+    <p class="text-micro text-base-content/60">{{.Hint}} Required slots: {{range $i, $slot := .Slots}}{{if $i}}, {{end}}<code>{{$slot}}</code>{{end}}.</p>
+    <p class="text-micro text-base-content/60">{{if .Customized}}Saved in <code>{{.File}}</code>, which replaces the inherited prompt.{{else}}Showing {{with .InheritedFile}}the prompt from <code>{{.}}</code>{{else}}the built-in prompt{{end}}. Saving writes <code>{{.File}}</code>.{{end}}</p>
+    <textarea name="template" aria-label="{{.Label}} prompt" class="textarea w-full" style="min-height:16rem;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;" spellcheck="false">{{.Template}}</textarea>
+    <div class="flex flex-wrap items-center gap-2">
+      <button class="btn btn-primary btn-sm rounded-selector px-4" type="submit">Save prompt</button>
+      {{if .Customized}}<button class="btn btn-ghost btn-sm rounded-selector px-4" type="button" onclick="this.nextElementSibling.showModal()">Revert to inherited</button>
+      <dialog class="modal"><div class="modal-box border border-base-300">
+        <p class="text-body">Delete <code>{{.File}}</code> and use the inherited prompt again?</p>
+        <div class="modal-action"><button class="btn rounded-selector px-4" type="button" onclick="this.closest('dialog').close()">Cancel</button><button class="btn btn-warning rounded-selector px-4" type="button" hx-delete="{{.Action}}" hx-target="#{{.ID}}" hx-swap="outerHTML">Revert</button></div>
+      </div></dialog>{{end}}
+      <span class="text-micro {{if eq .Status "Saved." "Reverted."}}text-success{{else}}text-base-content/60{{end}}" role="status" aria-live="polite">{{.Status}}</span>
+    </div>
+  </form>
+</details>
+{{end}}

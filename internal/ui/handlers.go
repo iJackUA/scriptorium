@@ -90,11 +90,15 @@ func routes(session *workspace.Session, agents func(string, agent.Logger) (agent
 	mux.HandleFunc("POST /books", s.addBook)
 	mux.HandleFunc("POST /settings/target-languages", s.setTargetLanguages)
 	mux.HandleFunc("POST /settings/choices", s.setWorkspaceChoices)
+	mux.HandleFunc("POST /settings/prompts/{prompt}", s.saveWorkspacePrompt)
+	mux.HandleFunc("DELETE /settings/prompts/{prompt}", s.revertWorkspacePrompt)
 	mux.HandleFunc("GET /books", s.booksList)
 	mux.HandleFunc("GET /series/{series}/books/{book}", s.bookDetail)
 	mux.HandleFunc("POST /series/{series}/books/{book}/source", s.uploadSourceFile)
 	mux.HandleFunc("POST /series/{series}/books/{book}/metadata", s.updateBookMetadata)
 	mux.HandleFunc("POST /series/{series}/books/{book}/choices", s.setBookChoices)
+	mux.HandleFunc("POST /series/{series}/books/{book}/prompts/{prompt}", s.saveBookPrompt)
+	mux.HandleFunc("DELETE /series/{series}/books/{book}/prompts/{prompt}", s.revertBookPrompt)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets", s.createTarget)
 	mux.HandleFunc("DELETE /series/{series}/books/{book}/targets/{target}", s.deleteTarget)
 	mux.HandleFunc("POST /series/{series}/books/{book}/targets/{target}/dictionary", s.startDictionaryBuilding)
@@ -612,7 +616,7 @@ func (s screens) startRepair(w http.ResponseWriter, r *http.Request, onlyFailed 
 }
 
 // readyToTranslate resolves the Book's translation Agent, Model and Effort and
-// checks the Series prompt override, both of which must load before
+// checks its translation prompt override, both of which must load before
 // translation starts rather than fail mid-Book. The Translator loads the
 // prompt again itself.
 func readyToTranslate(ws workspace.Workspace, series library.Series, book library.Book) (workspace.Choice, error) {
@@ -620,7 +624,7 @@ func readyToTranslate(ws workspace.Workspace, series library.Series, book librar
 	if err != nil {
 		return workspace.Choice{}, err
 	}
-	if _, err := translation.LoadPromptTemplate(ws.Root, series.Code); err != nil {
+	if _, err := translation.LoadPrompt(ws.Root, series.Code, book.Code, translation.PromptTranslation); err != nil {
 		return workspace.Choice{}, err
 	}
 	return choices.Translation, nil
@@ -722,6 +726,17 @@ func (s screens) startDictionaryBuilding(w http.ResponseWriter, r *http.Request)
 		s.detail(w, r, err.Error())
 		return
 	}
+	// Both prompts are loaded, and so validated, before the Status changes, so
+	// a broken override is reported here rather than as a failed run.
+	builder := translation.DictionaryBuilder{OccurrenceThreshold: ws.Config.DictionaryOccurrenceThreshold}
+	if builder.ExtractionTemplate, err = translation.LoadPrompt(ws.Root, seriesCode, bookCode, translation.PromptTermExtraction); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
+	if builder.TermTranslationTemplate, err = translation.LoadPrompt(ws.Root, seriesCode, bookCode, translation.PromptTermTranslation); err != nil {
+		s.detail(w, r, err.Error())
+		return
+	}
 	source, filename, err := store.SourceFile(seriesCode, bookCode)
 	if err != nil {
 		s.detail(w, r, err.Error())
@@ -738,7 +753,7 @@ func (s screens) startDictionaryBuilding(w http.ResponseWriter, r *http.Request)
 	}
 	key := dictionaryKey(seriesCode, bookCode, targetLanguage)
 	ctx, runID := s.dictionaryRuns.start(key, translation.DictionaryProgress{Active: 1, Total: len(translation.ChunkNodes(document.TextNodes(), 0))})
-	go s.buildDictionary(ctx, store, ws.Root, ws.Config, choices.Mechanical, series, book, targetLanguage, key, runID)
+	go s.buildDictionary(ctx, store, ws.Root, builder, choices.Mechanical, series, book, targetLanguage, key, runID)
 	s.bookDetail(w, r)
 }
 
@@ -881,7 +896,7 @@ func (s screens) loadDictionaryReview(w http.ResponseWriter, r *http.Request) (d
 	return review, true
 }
 
-func (s screens) buildDictionary(ctx context.Context, store library.Store, workspaceRoot string, config workspace.Config, mechanical workspace.Choice, series library.Series, book library.Book, targetLanguage, key string, runID uint64) {
+func (s screens) buildDictionary(ctx context.Context, store library.Store, workspaceRoot string, builder translation.DictionaryBuilder, mechanical workspace.Choice, series library.Series, book library.Book, targetLanguage, key string, runID uint64) {
 	defer s.dictionaryRuns.clear(key, runID)
 	fail := func(err error) {
 		if ctx.Err() != nil {
@@ -914,7 +929,8 @@ func (s screens) buildDictionary(ctx context.Context, store library.Store, works
 		fail(err)
 		return
 	}
-	terms, err := (translation.DictionaryBuilder{Agent: client, MechanicalModel: mechanical.Model, MechanicalEffort: mechanical.Effort, OccurrenceThreshold: config.DictionaryOccurrenceThreshold}).Build(ctx, document.TextNodes(), series.SourceLanguage, targetLanguage, func(progress translation.DictionaryProgress) {
+	builder.Agent, builder.MechanicalModel, builder.MechanicalEffort = client, mechanical.Model, mechanical.Effort
+	terms, err := builder.Build(ctx, document.TextNodes(), series.SourceLanguage, targetLanguage, func(progress translation.DictionaryProgress) {
 		s.dictionaryRuns.set(key, runID, progress)
 	})
 	if err != nil {
@@ -1166,6 +1182,7 @@ type bookDetailData struct {
 	Dictionaries        map[string]dictionaryReview
 	Prepared            map[string]bool
 	Choices             choicesPanel
+	Prompts             []promptEditor
 	Notice              string
 	Problem             string
 }
@@ -1239,7 +1256,7 @@ func (s screens) bookDetailData(series library.Series, book library.Book, proble
 			allowed = append(allowed, targetOption{Language: language, Status: existing[tag]})
 		}
 	}
-	return bookDetailData{Series: series, Book: book, Allowed: allowed, Languages: workspace.Catalog(), Progress: progress, TranslationProgress: translationProgress, Dictionaries: dictionaries, Prepared: prepared, Choices: bookChoicesPanel(s.catalogs.models, ws.Config, series, book), Problem: problem}
+	return bookDetailData{Series: series, Book: book, Allowed: allowed, Languages: workspace.Catalog(), Progress: progress, TranslationProgress: translationProgress, Dictionaries: dictionaries, Prepared: prepared, Choices: bookChoicesPanel(s.catalogs.models, ws.Config, series, book), Prompts: bookPromptLevel(series, book).editors(ws.Root), Problem: problem}
 }
 
 func (s screens) reviewDictionary(store library.Store, series library.Series, book library.Book, targetLanguage string) dictionaryReview {
@@ -1289,6 +1306,7 @@ type libraryScreen struct {
 	Languages       []workspace.Language
 	TargetLanguages []string
 	Choices         choicesPanel
+	Prompts         []promptEditor
 }
 
 // The library's forms, named so that a rejection can reopen the modal it came
@@ -1342,7 +1360,7 @@ func (s screens) screen(typed form) (string, any) {
 		return "welcome", welcome{Problem: err.Error()}
 	}
 	ws, _ := s.session.Current()
-	return "library", libraryScreen{Library: lib, Form: typed, Languages: workspace.Catalog(), TargetLanguages: ws.Config.Languages, Choices: workspaceChoicesPanel(s.catalogs.models, ws.Config.Choices)}
+	return "library", libraryScreen{Library: lib, Form: typed, Languages: workspace.Catalog(), TargetLanguages: ws.Config.Languages, Choices: workspaceChoicesPanel(s.catalogs.models, ws.Config.Choices), Prompts: workspacePromptLevel().editors(ws.Root)}
 }
 
 // current is the store for the open workspace, if one is open.

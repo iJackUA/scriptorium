@@ -18,11 +18,27 @@
       <dt class="text-base-content/50">Series source language</dt><dd>{{languageName .Series.SourceLanguage}} ({{.Series.SourceLanguage}})</dd>
     </dl>
 
-    <section class="flex flex-col gap-3 border-t border-base-300 pt-4">
-      <h3 class="section-label">Agent, Model and Effort</h3>
-      <p class="text-micro text-base-content/60">Override the workspace defaults for this Book only, to spend more on it than on the rest, or less.</p>
-      {{template "choices-panel" .Choices}}
-    </section>
+    <details class="group border-t border-base-300 pt-4" data-testid="book-choices-section">
+      <summary class="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="size-3.5 text-base-content/50 transition-transform group-open:rotate-90"><path stroke-linecap="round" stroke-linejoin="round" d="m9 5 7 7-7 7"/></svg>
+        <h3 class="section-label">Agent, Model and Effort</h3>
+      </summary>
+      <div class="mt-3 flex flex-col gap-3">
+        <p class="text-micro text-base-content/60">Override the workspace defaults for this Book only, to spend more on it than on the rest, or less.</p>
+        {{template "choices-panel" .Choices}}
+      </div>
+    </details>
+
+    <details class="group border-t border-base-300 pt-4" data-testid="book-prompts-section">
+      <summary class="flex cursor-pointer list-none items-center gap-2 [&::-webkit-details-marker]:hidden">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="size-3.5 text-base-content/50 transition-transform group-open:rotate-90"><path stroke-linecap="round" stroke-linejoin="round" d="m9 5 7 7-7 7"/></svg>
+        <h3 class="section-label">Prompts</h3>
+      </summary>
+      <div class="mt-3 flex flex-col gap-3">
+        <p class="text-micro text-base-content/60">Replace the workspace prompts for this Book only. A Book's own prompt wins over its Series' <code>prompt.md</code> and the workspace.</p>
+        {{template "prompt-editors" .Prompts}}
+      </div>
+    </details>
 
     <section class="flex flex-col gap-3 border-t border-base-300 pt-4">
       <h3 class="section-label">Source File</h3>
