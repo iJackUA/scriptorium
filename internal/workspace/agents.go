@@ -62,21 +62,15 @@ func (c Choices) With(task Task, choice Choice) Choices {
 // BuiltInModel is the Model a Task uses with agentName when nothing names
 // one, so a hand-trimmed config still works with no setup. It matches what
 // the default workspace.toml writes out.
-func BuiltInModel(agentName string, task Task) string {
+func BuiltInModel(agentName string, _ Task) string {
 	if agentName != agent.ClaudeName {
 		return ""
 	}
-	if task == TaskMechanical {
-		return "claude-haiku-4-5"
-	}
-	return "claude-opus-5"
+	return "claude-haiku-5-5"
 }
 
 // builtInEffort is the Effort a Task uses when nothing names one.
-func builtInEffort(task Task) agent.Effort {
-	if task == TaskMechanical {
-		return agent.EffortLow
-	}
+func builtInEffort(Task) agent.Effort {
 	return agent.EffortMedium
 }
 

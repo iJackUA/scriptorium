@@ -203,15 +203,15 @@ dictionary_occurrence_threshold = 2
 # xhigh or max. A Book may override any of them in its book.toml.
 
 # Mechanical work: inferring metadata, proposing Dictionary Terms. High volume,
-# low stakes, so this wants to be the cheap one.
+# low stakes.
 [mechanical]
 agent = "claude"
-model = "claude-haiku-4-5"
-effort = "low"
+model = "claude-haiku-5-5"
+effort = "medium"
 
-# Translation itself, where quality is the whole point.
+# Translation itself.
 [translation]
 agent = "claude"
-model = "claude-opus-5"
+model = "claude-haiku-5-5"
 effort = "medium"
 `

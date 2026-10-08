@@ -18,17 +18,17 @@ func openConfig(t *testing.T, body string) (Workspace, error) {
 	return Open(root)
 }
 
-func TestTheDefaultConfigChoosesACheapAndAStrongModel(t *testing.T) {
+func TestTheDefaultConfigChoosesHaikuAtMediumEffortForBothTasks(t *testing.T) {
 	ws, err := Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	mechanical, translation := ws.Config.Mechanical, ws.Config.Translation
-	if mechanical != (Choice{Agent: "claude", Model: "claude-haiku-4-5", Effort: agent.EffortLow}) {
-		t.Errorf("mechanical = %+v, want the cheap Model at low Effort", mechanical)
+	if mechanical != (Choice{Agent: "claude", Model: "claude-haiku-5-5", Effort: agent.EffortMedium}) {
+		t.Errorf("mechanical = %+v, want Haiku 5.5 at medium Effort", mechanical)
 	}
-	if translation != (Choice{Agent: "claude", Model: "claude-opus-5", Effort: agent.EffortMedium}) {
-		t.Errorf("translation = %+v, want the strong Model at medium Effort", translation)
+	if translation != (Choice{Agent: "claude", Model: "claude-haiku-5-5", Effort: agent.EffortMedium}) {
+		t.Errorf("translation = %+v, want Haiku 5.5 at medium Effort", translation)
 	}
 	written := read(t, filepath.Join(ws.Root, ConfigFile))
 	for _, want := range []string{"[mechanical]", "[translation]"} {

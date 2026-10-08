@@ -1003,8 +1003,8 @@ source_language = %s
 # agent = "claude"
 #
 # [models]
-# mechanical = "claude-haiku-4-5"
-# translation = "claude-opus-5"
+# mechanical = "claude-haiku-5-5"
+# translation = "claude-haiku-5-5"
 `
 
 const bookTemplate = `# A Book: one work, with one Source File. The folder this file sits in is the
@@ -1028,11 +1028,11 @@ source_file_language_edited = %t
 #
 # [mechanical]
 # agent = "claude"
-# model = "claude-haiku-4-5"
-# effort = "low"
+# model = "claude-haiku-5-5"
+# effort = "medium"
 #
 # [translation]
 # agent = "claude"
-# model = "claude-opus-5"
+# model = "claude-haiku-5-5"
 # effort = "medium"
 `
