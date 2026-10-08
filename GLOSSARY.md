@@ -24,6 +24,10 @@ _Avoid_: title, volume, ebook, document
 A short identifier assigned by hand, unique within its Series, that names the Book everywhere it is stored or referenced.
 _Avoid_: slug, id, shortname, key
 
+**Book Label**:
+The name a person sees for a Book: its metadata title, or its Book Code when no title is set.
+_Avoid_: display name, name, heading
+
 **Translation Target**:
 The pairing of a Book with one enabled Target Language distinct from its Series' Source Language. Progress, Dictionary, Status, and output all belong to a Translation Target rather than to the Book, so one Book can be translated into several languages independently.
 _Avoid_: job, run, output, task
@@ -31,6 +35,10 @@ _Avoid_: job, run, output, task
 **Status**:
 The stage a Translation Target has reached: `New`, `Analyzing`, `Dictionary Ready`, `Translating`, `Translated`, or `Failed`.
 _Avoid_: state, phase, progress
+
+**Failure Cause**:
+The reason a Translation Target is `Failed`: Dictionary Building, Chunks, Stopped by the user, or Interrupted. Interrupted means the application closed while the Target was Analyzing or Translating.
+_Avoid_: error, reason
 
 **Language Tag**:
 The canonical ISO 639-1 identifier for a Language, such as `en`, `uk`, or `de`. It is stored wherever a Source Language or Target Language is recorded; people see its human-readable Language name alongside it.
@@ -117,3 +125,17 @@ _Avoid_: engine, AI
 **Effort**:
 How much reasoning an Agent spends on one request: `low`, `medium`, `high`, `xhigh`, or `max`. Chosen, like the Agent and the Model, separately for mechanical work and for translation — in the Workspace as a default, and per Book as an override.
 _Avoid_: thinking budget, reasoning level
+
+### Activity
+
+**Activity**:
+Long-running work a Translation Target is doing right now: Dictionary Building, Translation, or Validate and Repair. Every Activity appears in the In progress list while it runs.
+_Avoid_: job, run, task, process, operation
+
+**Agent Transcript**:
+The record of every Agent call made for a Translation Target, with the prompt, raw reply, parsed reply, error, duration, and cost of each. Kept in the Translation Target's own folder.
+_Avoid_: log, trace, history, telemetry
+
+**Activity Log**:
+The view of an Activity's Agent calls, shown in a modal from the In progress list and updated while the Activity runs.
+_Avoid_: console, output
